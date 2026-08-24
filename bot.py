@@ -4,7 +4,6 @@ from telegram.constants import ChatType
 import json, os
 from datetime import datetime
 
-# ========== الإعدادات ==========
 TOKEN = "8845301824:AAE02vGKIeP4pLNDD_aww1gwkMPf0lY1mQs"
 MAIN_ADMIN_ID = "7021041990"
 
@@ -15,7 +14,6 @@ GROUPS_FILE = "groups.json"
 
 TITLE, DESCRIPTION, OPTIONS, CORRECT_OPTION, DURATION, PREVIEW = range(6)
 
-# ========== دوال التخزين ==========
 def load_json(file):
     if os.path.exists(file):
         with open(file, 'r', encoding='utf-8') as f:
@@ -43,7 +41,6 @@ def load_settings():
     if not settings:
         settings = {
             "allow_anonymous": True,
-            "bot_name": "بوت الاختبارات",
             "admin_ids": [MAIN_ADMIN_ID]
         }
         save_json(SETTINGS_FILE, settings)
@@ -96,7 +93,6 @@ def track_group(chat):
             }
             save_groups(groups)
 
-# ========== لوحة المفاتيح ==========
 def build_admin_keyboard():
     keyboard = [
         [InlineKeyboardButton("📝 إنشاء اختبار", callback_data="new_quiz")],
@@ -116,57 +112,27 @@ def build_manage_admins_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# ========== الأوامر الأساسية ==========
 async def start(update, context):
     track_user(update.effective_user)
     if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         track_group(update.effective_chat)
-        await update.message.reply_text(
-            "👋 أهلاً! أنا بوت الاختبارات.\n"
-            "يمكن للمسؤول إرسال اختبارات هنا."
-        )
+        await update.message.reply_text("👋 أهلاً! أنا بوت الاختبارات.")
         return
-    # في الخاص
     if is_admin(update):
-        await update.message.reply_text(
-            "🔐 **لوحة تحكم المسؤول**\n\nاختر من الأزرار:",
-            reply_markup=build_admin_keyboard(),
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text("🔐 **لوحة تحكم المسؤول**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
     else:
-        await update.message.reply_text(
-            "🎯 **مرحباً بك!**\n\n"
-            "هذا البوت مخصص للمسؤولين.\n"
-            "أرسل /help للمساعدة."
-        )
+        await update.message.reply_text("🎯 **مرحباً بك!**")
 
 async def help_command(update, context):
     track_user(update.effective_user)
-    text = (
-        "📖 **الأوامر:**\n\n"
-        "/start - بدء البوت\n"
-        "/newquiz - إنشاء اختبار\n"
-        "/admin - لوحة التحكم\n"
-        "/stats - الإحصائيات\n"
-        "/users - المستخدمون\n"
-        "/groups - المجموعات\n"
-        "/broadcast - رسالة للجميع\n"
-        "/help - المساعدة"
-    )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text("📖 /start - بدء\n/newquiz - اختبار جديد\n/admin - لوحة التحكم\n/stats - إحصائيات\n/users - مستخدمون\n/groups - مجموعات\n/broadcast - رسالة للجميع")
 
 async def admin_command(update, context):
     track_user(update.effective_user)
     if not is_admin(update):
-        await update.message.reply_text("🚫 للمسؤولين فقط.")
         return
-    await update.message.reply_text(
-        "🔐 **لوحة التحكم:**",
-        reply_markup=build_admin_keyboard(),
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text("🔐 **لوحة التحكم:**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
 
-# ========== معالج الأزرار الرئيسي ==========
 async def button_handler(update, context):
     query = update.callback_query
     await query.answer()
@@ -180,7 +146,6 @@ async def button_handler(update, context):
     if data == "new_quiz":
         await query.message.reply_text("✍️ أرسل عنوان الاختبار:")
         return TITLE
-
     elif data == "list_users":
         users = load_users()
         if not users:
@@ -192,22 +157,13 @@ async def button_handler(update, context):
             text += f"• {u['first_name']} ({username}) - ID: {uid}\n"
         await query.message.reply_text(text, parse_mode='Markdown')
         return ConversationHandler.END
-
     elif data == "stats":
         quizzes = load_quizzes()
         users = load_users()
         groups = load_groups()
         total = sum(q.get('participants', 0) for q in quizzes.values())
-        await query.message.reply_text(
-            f"📊 **الإحصائيات:**\n\n"
-            f"الاختبارات: {len(quizzes)}\n"
-            f"المستخدمون: {len(users)}\n"
-            f"المجموعات: {len(groups)}\n"
-            f"المشاركون: {total}",
-            parse_mode='Markdown'
-        )
+        await query.message.reply_text(f"📊 الاختبارات: {len(quizzes)}\nالمستخدمون: {len(users)}\nالمجموعات: {len(groups)}\nالمشاركون: {total}")
         return ConversationHandler.END
-
     elif data == "list_groups":
         groups = load_groups()
         if not groups:
@@ -218,51 +174,27 @@ async def button_handler(update, context):
             text += f"• {g['title']} - ID: {gid}\n"
         await query.message.reply_text(text, parse_mode='Markdown')
         return ConversationHandler.END
-
     elif data == "settings":
         settings = load_settings()
         status = "مفعل ✅" if settings.get("allow_anonymous") else "معطل ❌"
-        keyboard = [
-            [InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")],
-            [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]
-        ]
-        await query.message.reply_text(
-            f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        keyboard = [[InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
+        await query.message.reply_text(f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return ConversationHandler.END
-
     elif data == "toggle_anonymous":
         settings = load_settings()
         settings["allow_anonymous"] = not settings.get("allow_anonymous", True)
         save_settings(settings)
         status = "مفعل ✅" if settings["allow_anonymous"] else "معطل ❌"
-        keyboard = [
-            [InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")],
-            [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]
-        ]
-        await query.message.edit_text(
-            f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        keyboard = [[InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
+        await query.message.edit_text(f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return ConversationHandler.END
-
     elif data == "manage_admins":
-        await query.message.reply_text(
-            "➕➖ **إدارة المسؤولين:**",
-            reply_markup=build_manage_admins_keyboard()
-        )
+        await query.message.reply_text("➕➖ **إدارة المسؤولين:**", reply_markup=build_manage_admins_keyboard())
         return ConversationHandler.END
-
     elif data == "add_admin":
-        await query.message.reply_text(
-            "➕ أرسل ID المستخدم الذي تريد إضافته كمسؤول:"
-        )
+        await query.message.reply_text("➕ أرسل ID المستخدم:")
         context.user_data['awaiting_admin_id'] = True
         return ConversationHandler.END
-
     elif data == "remove_admin":
         admins = get_admin_ids()
         keyboard = []
@@ -273,20 +205,11 @@ async def button_handler(update, context):
             await query.message.reply_text("لا يوجد مسؤولون إضافيون.")
             return ConversationHandler.END
         keyboard.append([InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")])
-        await query.message.reply_text(
-            "➖ اختر المسؤول الذي تريد إزالته:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await query.message.reply_text("➖ اختر المسؤول للإزالة:", reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
-
     elif data == "back_admin":
-        await query.message.edit_text(
-            "🔐 **لوحة التحكم:**",
-            reply_markup=build_admin_keyboard(),
-            parse_mode='Markdown'
-        )
+        await query.message.edit_text("🔐 **لوحة التحكم:**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
         return ConversationHandler.END
-
     elif data.startswith("removeadmin_"):
         admin_id = data.replace("removeadmin_", "")
         settings = load_settings()
@@ -294,13 +217,10 @@ async def button_handler(update, context):
             settings["admin_ids"].remove(admin_id)
             save_settings(settings)
             await query.message.reply_text(f"✅ تم إزالة المسؤول: {admin_id}")
-        else:
-            await query.message.reply_text("هذا المستخدم ليس مسؤولاً.")
         return ConversationHandler.END
 
     return ConversationHandler.END
 
-# ========== معالج رسائل إضافة المسؤول ==========
 async def handle_awaiting_admin_id(update, context):
     if context.user_data.get('awaiting_admin_id'):
         context.user_data['awaiting_admin_id'] = False
@@ -313,14 +233,10 @@ async def handle_awaiting_admin_id(update, context):
             await update.message.reply_text(f"✅ تمت إضافة {user_id} كمسؤول.")
         else:
             await update.message.reply_text("هذا المستخدم مسؤول بالفعل.")
-        return
-    # إذا لم يكن بانتظار معرف، تابع المعالجة العادية للرسائل (قد لا تصل هنا لأن هناك handlers أخرى)
 
-# ========== إنشاء الاختبار (المحادثة) ==========
 async def new_quiz_command(update, context):
     track_user(update.effective_user)
     if not is_admin(update):
-        await update.message.reply_text("🚫 للمسؤولين فقط.")
         return ConversationHandler.END
     await update.message.reply_text("✍️ أرسل عنوان الاختبار:")
     return TITLE
@@ -329,27 +245,20 @@ async def get_title(update, context):
     track_user(update.effective_user)
     context.user_data['title'] = update.message.text
     keyboard = [[InlineKeyboardButton("⏭️ تخطي الوصف", callback_data="skip_description")]]
-    await update.message.reply_text(
-        "📝 أرسل الوصف (اختياري):",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("📝 أرسل الوصف (اختياري):", reply_markup=InlineKeyboardMarkup(keyboard))
     return DESCRIPTION
 
 async def skip_description(update, context):
     query = update.callback_query
     await query.answer()
     context.user_data['description'] = ""
-    await query.message.reply_text(
-        "🔢 أرسل الخيارات (كل خيار في سطر):\n\nمثال:\nباريس\nلندن\nمدريد"
-    )
+    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):\n\nمثال:\nباريس\nلندن\nمدريد")
     return OPTIONS
 
 async def get_description(update, context):
     track_user(update.effective_user)
     context.user_data['description'] = update.message.text
-    await query.message.reply_text(
-        "🔢 أرسل الخيارات (كل خيار في سطر):\n\nمثال:\nباريس\nلندن\nمدريد"
-    )
+    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):\n\nمثال:\nباريس\nلندن\nمدريد")
     return OPTIONS
 
 async def get_options(update, context):
@@ -362,38 +271,28 @@ async def get_options(update, context):
         await update.message.reply_text("⚠️ الحد الأقصى 10!")
         return OPTIONS
     context.user_data['options'] = options
-
     keyboard = []
     for i, opt in enumerate(options):
         keyboard.append([InlineKeyboardButton(f"✔️ {opt}", callback_data=f"correct_{i}")])
     keyboard.append([InlineKeyboardButton("⏭️ بدون إجابة صحيحة", callback_data="no_correct")])
-
-    await update.message.reply_text(
-        "✅ اختر الإجابة الصحيحة:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("✅ اختر الإجابة الصحيحة:", reply_markup=InlineKeyboardMarkup(keyboard))
     return CORRECT_OPTION
 
 async def correct_answer_handler(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == "no_correct":
         context.user_data['correct_option'] = None
     else:
         context.user_data['correct_option'] = int(data.replace("correct_", ""))
-
     keyboard = [
         [InlineKeyboardButton("⏱️ 30 ثانية", callback_data="duration_30")],
         [InlineKeyboardButton("⏱️ دقيقة", callback_data="duration_60")],
         [InlineKeyboardButton("⏱️ دقيقتان", callback_data="duration_120")],
         [InlineKeyboardButton("⏱️ 5 دقائق", callback_data="duration_300")],
     ]
-    await query.message.reply_text(
-        "⏳ اختر مدة الاختبار:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.message.reply_text("⏳ اختر مدة الاختبار:", reply_markup=InlineKeyboardMarkup(keyboard))
     return DURATION
 
 async def duration_handler(update, context):
@@ -401,7 +300,6 @@ async def duration_handler(update, context):
     await query.answer()
     duration = int(query.data.replace("duration_", ""))
     context.user_data['duration'] = duration
-
     quiz_id = datetime.now().strftime("%Y%m%d%H%M%S")
     quizzes = load_quizzes()
     quizzes[quiz_id] = {
@@ -415,23 +313,17 @@ async def duration_handler(update, context):
     }
     save_quizzes(quizzes)
     context.user_data['quiz_id'] = quiz_id
-
     preview_text = "📋 **معاينة:**\n\n"
     preview_text += f"❓ {context.user_data['title']}\n"
     if context.user_data.get('description'):
         preview_text += f"📝 {context.user_data['description']}\n"
     preview_text += f"⏱️ {duration} ثانية\n"
-
     keyboard = [
         [InlineKeyboardButton("🚀 بدء هنا", callback_data="start_here")],
         [InlineKeyboardButton("📤 مشاركة إلى مجموعة", callback_data="share_quiz")],
         [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")]
     ]
-    await query.message.reply_text(
-        preview_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await query.message.reply_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     return PREVIEW
 
 async def preview_handler(update, context):
@@ -439,45 +331,32 @@ async def preview_handler(update, context):
     await query.answer()
     data = query.data
     quiz_id = context.user_data.get('quiz_id')
-
     if data == "start_here":
         if quiz_id:
             await send_poll(query.message.chat_id, context, quiz_id)
             await query.message.reply_text("✅ تم بدء الاختبار!")
         return ConversationHandler.END
-
     elif data == "share_quiz":
-        # عرض المجموعات المسجلة للاختيار
         groups = load_groups()
         if not groups:
-            await query.message.reply_text(
-                "لا توجد مجموعات مسجلة.\n"
-                "أضف البوت إلى مجموعة ثم أرسل /start فيها لتسجيلها."
-            )
+            await query.message.reply_text("لا توجد مجموعات مسجلة.\nأضف البوت إلى مجموعة ثم أرسل /start فيها.")
             return ConversationHandler.END
         keyboard = []
         for gid, g in groups.items():
             keyboard.append([InlineKeyboardButton(f"📤 {g['title']}", callback_data=f"sendgroup_{gid}_{quiz_id}")])
         keyboard.append([InlineKeyboardButton("↩️ رجوع", callback_data="back_to_preview")])
-        await query.message.reply_text(
-            "🌐 اختر المجموعة التي تريد إرسال الاختبار إليها:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return PREVIEW  # stay in PREVIEW state to handle next callback
-
+        await query.message.reply_text("🌐 اختر المجموعة:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return PREVIEW
     elif data == "new_quiz":
         await query.message.reply_text("✍️ أرسل عنوان الاختبار الجديد:")
         return TITLE
-
     elif data == "back_to_preview":
-        # العودة إلى المعاينة
         quiz_id = context.user_data.get('quiz_id')
         if quiz_id:
             quizzes = load_quizzes()
             quiz = quizzes.get(quiz_id)
             if quiz:
-                preview_text = "📋 **معاينة:**\n\n"
-                preview_text += f"❓ {quiz['title']}\n"
+                preview_text = f"📋 **معاينة:**\n\n❓ {quiz['title']}\n"
                 if quiz.get('description'):
                     preview_text += f"📝 {quiz['description']}\n"
                 preview_text += f"⏱️ {quiz['duration']} ثانية\n"
@@ -486,33 +365,21 @@ async def preview_handler(update, context):
                     [InlineKeyboardButton("📤 مشاركة إلى مجموعة", callback_data="share_quiz")],
                     [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")]
                 ]
-                await query.message.edit_text(
-                    preview_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
+                await query.message.edit_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return PREVIEW
-
     elif data.startswith("sendgroup_"):
-        # استخراج group_id و quiz_id من البيانات
-        # الصيغة: sendgroup_<group_id>_<quiz_id>
         parts = data.split("_")
         if len(parts) >= 3:
             group_id = parts[1]
             quiz_id = parts[2]
-            # إرسال الاستفتاء إلى المجموعة
             try:
                 await send_poll(group_id, context, quiz_id)
                 await query.message.reply_text("✅ تم إرسال الاختبار إلى المجموعة وبدءه.")
             except Exception as e:
                 await query.message.reply_text(f"❌ فشل الإرسال: {e}")
-        else:
-            await query.message.reply_text("❌ بيانات غير صحيحة.")
         return ConversationHandler.END
-
     return ConversationHandler.END
 
-# ========== إرسال الاستفتاء ==========
 async def send_poll(chat_id, context, quiz_id):
     quizzes = load_quizzes()
     quiz = quizzes.get(quiz_id)
@@ -523,30 +390,13 @@ async def send_poll(chat_id, context, quiz_id):
     correct_option = quiz.get('correct_option')
     duration = quiz.get('duration', 60)
     is_anonymous = settings.get('allow_anonymous', True)
-
     if correct_option is not None:
-        await context.bot.send_poll(
-            chat_id=chat_id,
-            question=quiz['title'],
-            options=options,
-            type=Poll.QUIZ,
-            correct_option_id=correct_option,
-            explanation=quiz.get('description', ''),
-            is_anonymous=is_anonymous,
-            open_period=duration
-        )
+        await context.bot.send_poll(chat_id=chat_id, question=quiz['title'], options=options, type=Poll.QUIZ, correct_option_id=correct_option, explanation=quiz.get('description', ''), is_anonymous=is_anonymous, open_period=duration)
     else:
-        await context.bot.send_poll(
-            chat_id=chat_id,
-            question=quiz['title'],
-            options=options,
-            is_anonymous=is_anonymous,
-            open_period=duration
-        )
+        await context.bot.send_poll(chat_id=chat_id, question=quiz['title'], options=options, is_anonymous=is_anonymous, open_period=duration)
     quiz['participants'] = quiz.get('participants', 0) + 1
     save_quizzes(quizzes)
 
-# ========== أوامر إضافية ==========
 async def stats_command(update, context):
     track_user(update.effective_user)
     if not is_admin(update):
@@ -554,4 +404,66 @@ async def stats_command(update, context):
     quizzes = load_quizzes()
     users = load_users()
     groups = load_groups()
-    total = sum(q.get('
+    total = sum(q.get('participants', 0) for q in quizzes.values())
+    await update.message.reply_text(f"📊 الاختبارات: {len(quizzes)}\nالمستخدمون: {len(users)}\nالمجموعات: {len(groups)}\nالمشاركون: {total}")
+
+async def users_command(update, context):
+    track_user(update.effective_user)
+    if not is_admin(update):
+        return
+    users = load_users()
+    if not users:
+        await update.message.reply_text("لا يوجد مستخدمون.")
+        return
+    text = "👥 **المستخدمون:**\n\n"
+    for uid, u in users.items():
+        username = f"@{u['username']}" if u.get('username') else "بدون"
+        text += f"• {u['first_name']} ({username}) - ID: {uid}\n"
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def groups_command(update, context):
+    track_user(update.effective_user)
+    if not is_admin(update):
+        return
+    groups = load_groups()
+    if not groups:
+        await update.message.reply_text("لا توجد مجموعات مسجلة.")
+        return
+    text = "🌐 **المجموعات:**\n\n"
+    for gid, g in groups.items():
+        text += f"• {g['title']} - ID: {gid}\n"
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def broadcast_command(update, context):
+    track_user(update.effective_user)
+    if not is_main_admin(update):
+        await update.message.reply_text("🚫 للمسؤول الرئيسي فقط.")
+        return
+    if not context.args:
+        await update.message.reply_text("استخدم: /broadcast <رسالة>")
+        return
+    message = " ".join(context.args)
+    users = load_users()
+    sent = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=f"📢 {message}")
+            sent += 1
+        except:
+            pass
+    await update.message.reply_text(f"✅ تم الإرسال إلى {sent} مستخدم.")
+
+async def cancel(update, context):
+    await update.message.reply_text("تم الإلغاء.")
+    return ConversationHandler.END
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('newquiz', new_quiz_command), CallbackQueryHandler(button_handler)],
+        states={
+            TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_description), CallbackQueryHandler(skip_description, pattern="^skip_description$")],
+            OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_options)],
+            CORRECT_OPTION: [CallbackQueryHandler(correct_answer_handler, pattern="^(correct_|no_correct)")],
+            DURATION: [Callba
