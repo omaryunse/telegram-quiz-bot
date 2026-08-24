@@ -6,7 +6,6 @@ import os
 from datetime import datetime
 
 TOKEN = "8845301824:AAE02vGKIeP4pLNDD_aww1gwkMPf0lY1mQs"
-MAIN_ADMIN_ID = "7021041990"
 ADMIN_IDS = ["7021041990", "8810965759", "7020921829"]
 
 QUIZZES_FILE = "quizzes.json"
@@ -46,7 +45,7 @@ def save_users(data):
 def load_settings():
     settings = load_json(SETTINGS_FILE)
     if not settings:
-        settings = {"allow_anonymous": True, "admin_ids": ADMIN_IDS}
+        settings = {"allow_anonymous": True}
         save_json(SETTINGS_FILE, settings)
     return settings
 
@@ -60,12 +59,7 @@ def save_groups(data):
     save_json(GROUPS_FILE, data)
 
 def is_admin(update):
-    settings = load_settings()
-    admin_ids = settings.get("admin_ids", ADMIN_IDS)
-    return str(update.effective_user.id) in admin_ids
-
-def is_main_admin(update):
-    return str(update.effective_user.id) == MAIN_ADMIN_ID
+    return str(update.effective_user.id) in ADMIN_IDS
 
 def track_user(user):
     users = load_users()
@@ -92,7 +86,6 @@ def build_admin_keyboard():
         [InlineKeyboardButton("📊 الإحصائيات", callback_data="stats")],
         [InlineKeyboardButton("🌐 المجموعات", callback_data="list_groups")],
         [InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings")],
-        [InlineKeyboardButton("➕ إدارة المسؤولين", callback_data="manage_admins")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -108,7 +101,7 @@ async def start(update, context):
         await update.message.reply_text("🎯 **مرحباً بك!**")
 
 async def help_command(update, context):
-    await update.message.reply_text("/start - بدء\n/newquiz - اختبار جديد\n/admin - لوحة التحكم")
+    await update.message.reply_text("/start - بدء\n/newquiz - اختبار جديد")
 
 async def admin_command(update, context):
     if not is_admin(update):
@@ -124,7 +117,7 @@ async def button_handler(update, context):
         await query.answer("🚫 للمسؤولين فقط", show_alert=True)
         return ConversationHandler.END
     if data == "new_quiz":
-        await query.message.reply_text("✍️ أرسل عنوان الاختبار:")
+        await query.message.reply_text("✍️ أرسل سؤال الاختبار:")
         return TITLE
     elif data == "list_users":
         users = load_users()
@@ -168,57 +161,15 @@ async def button_handler(update, context):
         keyboard = [[InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
         await query.message.edit_text(f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return ConversationHandler.END
-    elif data == "manage_admins":
-        keyboard = [[InlineKeyboardButton("➕ إضافة مسؤول", callback_data="add_admin")], [InlineKeyboardButton("➖ إزالة مسؤول", callback_data="remove_admin")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
-        await query.message.reply_text("➕➖ **إدارة المسؤولين:**", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ConversationHandler.END
-    elif data == "add_admin":
-        await query.message.reply_text("➕ أرسل ID المستخدم:")
-        context.user_data['awaiting_admin_id'] = True
-        return ConversationHandler.END
-    elif data == "remove_admin":
-        settings = load_settings()
-        admin_ids = settings.get("admin_ids", ADMIN_IDS)
-        keyboard = []
-        for admin_id in admin_ids:
-            if admin_id != MAIN_ADMIN_ID:
-                keyboard.append([InlineKeyboardButton(f"❌ {admin_id}", callback_data=f"removeadmin_{admin_id}")])
-        if not keyboard:
-            await query.message.reply_text("لا يوجد مسؤولون إضافيون.")
-            return ConversationHandler.END
-        keyboard.append([InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")])
-        await query.message.reply_text("➖ اختر المسؤول للإزالة:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ConversationHandler.END
     elif data == "back_admin":
         await query.message.edit_text("🔐 **لوحة التحكم:**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
         return ConversationHandler.END
-    elif data.startswith("removeadmin_"):
-        admin_id = data.replace("removeadmin_", "")
-        settings = load_settings()
-        if admin_id in settings.get("admin_ids", []):
-            settings["admin_ids"].remove(admin_id)
-            save_settings(settings)
-            await query.message.reply_text(f"✅ تم إزالة المسؤول: {admin_id}")
-        return ConversationHandler.END
     return ConversationHandler.END
-
-async def handle_awaiting_admin_id(update, context):
-    if context.user_data.get('awaiting_admin_id'):
-        context.user_data['awaiting_admin_id'] = False
-        user_id = update.message.text.strip()
-        settings = load_settings()
-        if user_id not in settings.get("admin_ids", []):
-            settings["admin_ids"] = settings.get("admin_ids", [])
-            settings["admin_ids"].append(user_id)
-            save_settings(settings)
-            await update.message.reply_text(f"✅ تمت إضافة {user_id} كمسؤول.")
-        else:
-            await update.message.reply_text("هذا المستخدم مسؤول بالفعل.")
 
 async def new_quiz_command(update, context):
     if not is_admin(update):
         return ConversationHandler.END
-    await update.message.reply_text("✍️ أرسل عنوان الاختبار:")
+    await update.message.reply_text("✍️ أرسل سؤال الاختبار:")
     return TITLE
 
 async def get_title(update, context):
@@ -320,7 +271,7 @@ async def preview_handler(update, context):
         await query.message.reply_text("🌐 اختر المجموعة:", reply_markup=InlineKeyboardMarkup(keyboard))
         return PREVIEW
     elif data == "new_quiz":
-        await query.message.reply_text("✍️ أرسل عنوان الاختبار الجديد:")
+        await query.message.reply_text("✍️ أرسل سؤال الاختبار الجديد:")
         return TITLE
     elif data == "back_to_preview":
         quiz_id = context.user_data.get('quiz_id')
@@ -363,9 +314,24 @@ async def send_poll(chat_id, context, quiz_id):
     duration = quiz.get('duration', 60)
     is_anonymous = settings.get('allow_anonymous', True)
     if correct_option is not None:
-        await context.bot.send_poll(chat_id=chat_id, question=quiz['title'], options=options, type=Poll.QUIZ, correct_option_id=correct_option, explanation=quiz.get('description', ''), is_anonymous=is_anonymous, open_period=duration)
+        await context.bot.send_poll(
+            chat_id=chat_id,
+            question=quiz['title'],
+            options=options,
+            type=Poll.QUIZ,
+            correct_option_id=correct_option,
+            explanation=quiz.get('description', ''),
+            is_anonymous=is_anonymous,
+            open_period=duration
+        )
     else:
-        await context.bot.send_poll(chat_id=chat_id, question=quiz['title'], options=options, is_anonymous=is_anonymous, open_period=duration)
+        await context.bot.send_poll(
+            chat_id=chat_id,
+            question=quiz['title'],
+            options=options,
+            is_anonymous=is_anonymous,
+            open_period=duration
+        )
     quiz['participants'] = quiz.get('participants', 0) + 1
     save_quizzes(quizzes)
 
@@ -392,7 +358,6 @@ def main():
     app.add_handler(CommandHandler('admin', admin_command))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_awaiting_admin_id))
     print("البوت يعمل الآن...")
     app.run_polling()
 
