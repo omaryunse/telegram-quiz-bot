@@ -119,7 +119,7 @@ async def button_handler(update, context):
         await query.answer("🚫 للمسؤولين فقط", show_alert=True)
         return ConversationHandler.END
     if data == "new_quiz":
-        await query.message.reply_text("✍️ أرسل عنوان الاختبار:")
+        await query.message.reply_text("✍️ أرسل عنوان الاختبار:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
         return TITLE
     elif data == "list_users":
         users = load_users()
@@ -183,12 +183,15 @@ async def button_handler(update, context):
 async def new_quiz_command(update, context):
     if not is_admin(update):
         return ConversationHandler.END
-    await update.message.reply_text("✍️ أرسل عنوان الاختبار:")
+    await update.message.reply_text("✍️ أرسل عنوان الاختبار:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
     return TITLE
 
 async def get_title(update, context):
     context.user_data['title'] = update.message.text
-    keyboard = [[InlineKeyboardButton("⏭️ تخطي الوصف", callback_data="skip_description")]]
+    keyboard = [
+        [InlineKeyboardButton("⏭️ تخطي الوصف", callback_data="skip_description")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]
+    ]
     await update.message.reply_text("📝 أرسل وصف الاختبار (اختياري):", reply_markup=InlineKeyboardMarkup(keyboard))
     return DESCRIPTION
 
@@ -196,25 +199,26 @@ async def skip_description(update, context):
     query = update.callback_query
     await query.answer()
     context.user_data['description'] = ""
-    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):")
+    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
     return OPTIONS
 
 async def get_description(update, context):
     context.user_data['description'] = update.message.text
-    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):")
+    await query.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
     return OPTIONS
 
 async def get_options(update, context):
     options = [line.strip() for line in update.message.text.split('\n') if line.strip()]
     if len(options) < 2:
-        await query.message.reply_text("⚠️ خياران على الأقل!")
+        await update.message.reply_text("⚠️ خياران على الأقل!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
         return OPTIONS
     context.user_data['options'] = options
     keyboard = []
     for i, opt in enumerate(options):
         keyboard.append([InlineKeyboardButton(f"✔️ {opt}", callback_data=f"correct_{i}")])
     keyboard.append([InlineKeyboardButton("⏭️ بدون إجابة صحيحة", callback_data="no_correct")])
-    await query.message.reply_text("✅ اختر الإجابة الصحيحة:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")])
+    await update.message.reply_text("✅ اختر الإجابة الصحيحة:", reply_markup=InlineKeyboardMarkup(keyboard))
     return CORRECT_OPTION
 
 async def correct_answer_handler(update, context):
@@ -231,6 +235,7 @@ async def correct_answer_handler(update, context):
         [InlineKeyboardButton("⏱️ دقيقتان", callback_data="duration_120")],
         [InlineKeyboardButton("⏱️ 5 دقائق", callback_data="duration_300")],
         [InlineKeyboardButton("⏱️ 10 دقائق", callback_data="duration_600")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]
     ]
     await query.message.reply_text("⏳ اختر مدة الاختبار:", reply_markup=InlineKeyboardMarkup(keyboard))
     return DURATION
@@ -259,7 +264,8 @@ async def duration_handler(update, context):
     keyboard = [
         [InlineKeyboardButton("🚀 بدء هنا", callback_data="start_here")],
         [InlineKeyboardButton("📤 بدء في مجموعة", callback_data="share_quiz")],
-        [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")]
+        [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]
     ]
     await query.message.reply_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     return PREVIEW
@@ -286,7 +292,7 @@ async def preview_handler(update, context):
         await query.message.reply_text("🌐 اختر المجموعة:", reply_markup=InlineKeyboardMarkup(keyboard))
         return PREVIEW
     elif data == "new_quiz":
-        await query.message.reply_text("✍️ أرسل عنوان الاختبار الجديد:")
+        await query.message.reply_text("✍️ أرسل عنوان الاختبار الجديد:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]]))
         return TITLE
     elif data == "back_to_preview":
         quiz_id = context.user_data.get('quiz_id')
@@ -301,7 +307,8 @@ async def preview_handler(update, context):
                 keyboard = [
                     [InlineKeyboardButton("🚀 بدء هنا", callback_data="start_here")],
                     [InlineKeyboardButton("📤 بدء في مجموعة", callback_data="share_quiz")],
-                    [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")]
+                    [InlineKeyboardButton("➕ سؤال آخر", callback_data="new_quiz")],
+                    [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_quiz")]
                 ]
                 await query.message.edit_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return PREVIEW
@@ -350,6 +357,12 @@ async def send_poll(chat_id, context, quiz_id):
     quiz['participants'] = quiz.get('participants', 0) + 1
     save_quizzes(quizzes)
 
+async def cancel_quiz(update, context):
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("تم إلغاء العملية.")
+    return ConversationHandler.END
+
 async def cancel(update, context):
     await update.message.reply_text("تم الإلغاء.")
     return ConversationHandler.END
@@ -366,7 +379,7 @@ def main():
             DURATION: [CallbackQueryHandler(duration_handler, pattern="^duration_")],
             PREVIEW: [CallbackQueryHandler(preview_handler, pattern="^(start_here|share_quiz|new_quiz|back_to_preview|sendgroup_)")],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel_quiz, pattern="^cancel_quiz$")]
     )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_command))
