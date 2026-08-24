@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import json, os
 from datetime import datetime, timedelta
 
-TOKEN = "ضع_التوك8845301824:AAE02vGKIeP4pLNDD_aww1gwkMPf0lY1mQsن_هنا"
+TOKEN = "8845301824:AAE02vGKIeP4pLNDD_aww1gwkMPf0lY1mQs"
 
 # حالات المحادثة
 TITLE, DESCRIPTION, OPTIONS, CORRECT_OPTION, DURATION, PREVIEW = range(6)
