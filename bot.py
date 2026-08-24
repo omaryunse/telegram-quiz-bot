@@ -13,7 +13,12 @@ USERS_FILE = "users.json"
 SETTINGS_FILE = "settings.json"
 GROUPS_FILE = "groups.json"
 
-TITLE, DESCRIPTION, OPTIONS, CORRECT_OPTION, DURATION, PREVIEW = range(6)
+TITLE = 0
+DESCRIPTION = 1
+OPTIONS = 2
+CORRECT_OPTION = 3
+DURATION = 4
+PREVIEW = 5
 
 def load_json(file):
     if os.path.exists(file):
@@ -62,8 +67,14 @@ def track_user(user):
     users = load_users()
     uid = str(user.id)
     if uid not in users:
-        users[uid] = {"first_name": user.first_name or "بدون", "username": user.username or "", "total_messages": 0}
+        users[uid] = {
+            "first_name": user.first_name or "بدون",
+            "username": user.username or "",
+            "total_messages": 0,
+            "last_seen": datetime.now().isoformat()
+        }
     users[uid]["total_messages"] = users[uid].get("total_messages", 0) + 1
+    users[uid]["last_seen"] = datetime.now().isoformat()
     if user.username:
         users[uid]["username"] = user.username
     save_users(users)
@@ -73,7 +84,7 @@ def track_group(chat):
         groups = load_groups()
         gid = str(chat.id)
         if gid not in groups:
-            groups[gid] = {"title": chat.title or "بدون"}
+            groups[gid] = {"title": chat.title or "بدون", "added_at": datetime.now().isoformat()}
             save_groups(groups)
 
 def build_admin_keyboard():
@@ -91,18 +102,19 @@ async def start(update, context):
     track_user(update.effective_user)
     if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         track_group(update.effective_chat)
-        await update.message.reply_text("👋 أهلاً! أنا بوت الاختبارات.")
+        await update.message.reply_text("👋 أهلاً! أنا بوت الاختبارات.\nيمكن للمسؤول إرسال اختبارات هنا.")
         return
     if is_admin(update):
-        await update.message.reply_text("🔐 **لوحة تحكم المسؤول**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text("🔐 **لوحة تحكم المسؤول**\n\nاختر من الأزرار:", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
     else:
-        await update.message.reply_text("🎯 **مرحباً بك!**")
+        await update.message.reply_text("🎯 **مرحباً بك!**\n\nهذا البوت مخصص للمسؤولين.")
 
 async def help_command(update, context):
     await update.message.reply_text("📖 /start - بدء\n/newquiz - اختبار جديد\n/admin - لوحة التحكم")
 
 async def admin_command(update, context):
     if not is_admin(update):
+        await update.message.reply_text("🚫 للمسؤولين فقط.")
         return
     await update.message.reply_text("🔐 **لوحة التحكم:**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
 
