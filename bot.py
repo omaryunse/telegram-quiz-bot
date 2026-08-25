@@ -85,10 +85,8 @@ def build_admin_keyboard():
     keyboard = [
         [InlineKeyboardButton("📝 إنشاء اختبار", callback_data="new_quiz")],
         [InlineKeyboardButton("📊 نتائج الاختبارات", callback_data="quiz_results")],
-        [InlineKeyboardButton("📋 الاختبارات", callback_data="list_quizzes")],
         [InlineKeyboardButton("🌐 المجموعات", callback_data="list_groups")],
         [InlineKeyboardButton("👥 المستخدمون", callback_data="list_users")],
-        [InlineKeyboardButton("📢 بث جماعي", callback_data="broadcast")],
         [InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -128,33 +126,6 @@ async def button_handler(update, context):
     elif data == "quiz_results":
         await show_quiz_results(query)
         return ConversationHandler.END
-    elif data == "list_quizzes":
-        quizzes = load_quizzes()
-        if not quizzes:
-            await query.message.reply_text("لا توجد اختبارات.")
-            return ConversationHandler.END
-        text = "📋 **الاختبارات:**\n\n"
-        for qid, q in quizzes.items():
-            text += f"• {q['title']} - 👥 {q.get('participants', 0)}\n"
-        keyboard = [[InlineKeyboardButton("🗑️ حذف اختبار", callback_data="delete_quiz")]]
-        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-        return ConversationHandler.END
-    elif data == "delete_quiz":
-        quizzes = load_quizzes()
-        keyboard = []
-        for qid, q in quizzes.items():
-            keyboard.append([InlineKeyboardButton(f"🗑️ {q['title']}", callback_data=f"delquiz_{qid}")])
-        keyboard.append([InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")])
-        await query.message.reply_text("اختر الاختبار للحذف:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ConversationHandler.END
-    elif data.startswith("delquiz_"):
-        qid = data.replace("delquiz_", "")
-        quizzes = load_quizzes()
-        if qid in quizzes:
-            del quizzes[qid]
-            save_quizzes(quizzes)
-            await query.message.reply_text("✅ تم حذف الاختبار.")
-        return ConversationHandler.END
     elif data == "list_users":
         users = load_users()
         if not users:
@@ -166,13 +137,6 @@ async def button_handler(update, context):
             text += f"• {u['first_name']} ({username}) - ID: {uid}\n"
         await query.message.reply_text(text, parse_mode='Markdown')
         return ConversationHandler.END
-    elif data == "stats":
-        quizzes = load_quizzes()
-        users = load_users()
-        groups = load_groups()
-        total = sum(q.get('participants', 0) for q in quizzes.values())
-        await query.message.reply_text(f"📊 الاختبارات: {len(quizzes)}\nالمستخدمون: {len(users)}\nالمجموعات: {len(groups)}\nالمشاركون: {total}")
-        return ConversationHandler.END
     elif data == "list_groups":
         groups = load_groups()
         if not groups:
@@ -183,18 +147,10 @@ async def button_handler(update, context):
             text += f"• {g['title']} - ID: {gid}\n"
         await query.message.reply_text(text, parse_mode='Markdown')
         return ConversationHandler.END
-    elif data == "broadcast":
-        await query.message.reply_text("📢 أرسل الرسالة التي تريد إرسالها للجميع:")
-        context.user_data['awaiting_broadcast'] = True
-        return ConversationHandler.END
     elif data == "settings":
         settings = load_settings()
         status = "مفعل ✅" if settings.get("allow_anonymous") else "معطل ❌"
-        keyboard = [
-            [InlineKeyboardButton(f"🔄 الاستفتاء السري: {status}", callback_data="toggle_anonymous")],
-            [InlineKeyboardButton("✏️ تغيير اسم البوت", callback_data="rename_bot")],
-            [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]
-        ]
+        keyboard = [[InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
         await query.message.reply_text(f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return ConversationHandler.END
     elif data == "toggle_anonymous":
@@ -202,16 +158,8 @@ async def button_handler(update, context):
         settings["allow_anonymous"] = not settings.get("allow_anonymous", True)
         save_settings(settings)
         status = "مفعل ✅" if settings["allow_anonymous"] else "معطل ❌"
-        keyboard = [
-            [InlineKeyboardButton(f"🔄 الاستفتاء السري: {status}", callback_data="toggle_anonymous")],
-            [InlineKeyboardButton("✏️ تغيير اسم البوت", callback_data="rename_bot")],
-            [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]
-        ]
+        keyboard = [[InlineKeyboardButton(f"🔄 السري: {status}", callback_data="toggle_anonymous")], [InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")]]
         await query.message.edit_text(f"⚙️ **الإعدادات:**\n\nالاستفتاء السري: {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-        return ConversationHandler.END
-    elif data == "rename_bot":
-        await query.message.reply_text("✏️ أرسل الاسم الجديد للبوت:")
-        context.user_data['awaiting_rename'] = True
         return ConversationHandler.END
     elif data == "back_admin":
         await query.message.edit_text("🔐 **لوحة التحكم:**", reply_markup=build_admin_keyboard(), parse_mode='Markdown')
@@ -250,29 +198,6 @@ async def result_callback(update, context):
         status = "✅" if r.get("is_correct") else "❌"
         text += f"{status} {r.get('first_name','')} ({username}) - اختار: {r.get('selected_option','')}\n"
     await query.message.reply_text(text, parse_mode='Markdown')
-
-async def handle_extra_inputs(update, context):
-    if context.user_data.get('awaiting_broadcast'):
-        context.user_data['awaiting_broadcast'] = False
-        message = update.message.text
-        users = load_users()
-        sent = 0
-        for uid in users:
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"📢 {message}")
-                sent += 1
-            except:
-                pass
-        await update.message.reply_text(f"✅ تم الإرسال إلى {sent} مستخدم.")
-        return
-    if context.user_data.get('awaiting_rename'):
-        context.user_data['awaiting_rename'] = False
-        new_name = update.message.text.strip()
-        settings = load_settings()
-        settings["bot_name"] = new_name
-        save_settings(settings)
-        await update.message.reply_text(f"✅ تم تغيير اسم البوت إلى: {new_name}")
-        return
 
 async def new_quiz_command(update, context):
     if not is_admin(update):
@@ -471,3 +396,36 @@ async def poll_answer_handler(update, context):
             })
             save_results(results)
             q['participants'] = q.get('participants', 0) + 1
+            save_quizzes(quizzes)
+            break
+
+async def cancel(update, context):
+    await update.message.reply_text("تم الإلغاء.")
+    return ConversationHandler.END
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('newquiz', new_quiz_command), CallbackQueryHandler(button_handler)],
+        states={
+            TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_description), CallbackQueryHandler(skip_description, pattern="^skip_description$")],
+            OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_options)],
+            CORRECT_OPTION: [CallbackQueryHandler(correct_answer_handler, pattern="^(correct_|no_correct)")],
+            DURATION: [CallbackQueryHandler(duration_handler, pattern="^duration_")],
+            PREVIEW: [CallbackQueryHandler(preview_handler, pattern="^(start_here|share_quiz|new_quiz|back_to_preview|sendgroup_)")],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('help', help_command))
+    app.add_handler(CommandHandler('admin', admin_command))
+    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(result_callback, pattern="^result_"))
+    app.add_handler(PollAnswerHandler(poll_answer_handler))
+    print("البوت يعمل الآن...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
