@@ -5,9 +5,7 @@ import json
 import os
 from datetime import datetime
 
-# ====== ضع التوكن الجديد هنا ======
 TOKEN = "8845301824:AAGptI-Na__Tp0ZbFgvQ-HSfHOawDCuhFK4"
-
 ADMIN_IDS = ["7021041990", "8810965759", "7020921829"]
 
 QUIZZES_FILE = "quizzes.json"
@@ -344,7 +342,8 @@ async def duration_handler(update, context):
         'options': context.user_data['options'],
         'correct_option': context.user_data.get('correct_option'),
         'duration': duration,
-        'participants': 0
+        'participants': 0,
+        'poll_id': None
     }
     save_quizzes(quizzes)
     context.user_data['quiz_id'] = quiz_id
@@ -445,7 +444,7 @@ async def send_poll(chat_id, context, quiz_id):
         )
     quiz['poll_id'] = message.poll.id
     quiz['chat_id'] = chat_id
-    quiz['participants'] = quiz.get('participants', 0)
+    quiz['participants'] = quiz.get('participants', 0) + 1
     save_quizzes(quizzes)
 
 async def poll_answer_handler(update, context):
