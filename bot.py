@@ -471,4 +471,4 @@ async def poll_answer_handler(update, context):
                 "answered_at": datetime.now().isoformat()
             })
             save_results(results)
-         q['participants'] = q.get('participants', 0) + 1
+            q['participants'] = q.get('participants', 0) + 1
