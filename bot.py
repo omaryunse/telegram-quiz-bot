@@ -559,7 +559,6 @@ async def start_sequential_quiz_for_user(user_id: int, context: ContextTypes.DEF
         await send_question_to_user(user_id, context, quiz, 0)
     except Exception:
         # user may not have opened private chat with bot
-        # inform via admin or ignore
         logger.exception("Failed to send first question to user %s", user_id)
 
 async def send_question_to_user(chat_id: int, context: ContextTypes.DEFAULT_TYPE, quiz: Dict[str, Any], q_index: int) -> None:
@@ -577,6 +576,7 @@ async def send_question_to_user(chat_id: int, context: ContextTypes.DEFAULT_TYPE
     options = q.get("options", [])
     keyboard = []
     for i, opt in enumerate(options):
+        # include quiz_id to reliably map callback to quiz
         keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"answer_{quiz.get('title','')}_{q_index}_{i}")])
     keyboard.append([InlineKeyboardButton("تخطي السؤال", callback_data=f"answer_{quiz.get('title','')}_{q_index}_-1")])
     await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -592,18 +592,15 @@ async def answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(user.id)
     data = query.data  # format: answer_{quiztitle}_{qindex}_{opt}
     parts = data.split("_")
-    # We used quiz title in callback to avoid underscores collision; parse from end
     if len(parts) < 4:
         await query.message.reply_text("بيانات غير صحيحة.")
         return
-    # last two parts are qindex and opt
     try:
         q_index = int(parts[-2])
         opt_index = int(parts[-1])
     except Exception:
         await query.message.reply_text("بيانات غير صحيحة.")
         return
-    # find session
     session = ACTIVE_SESSIONS.get(uid)
     if not session:
         await query.message.reply_text("لا يوجد اختبار نشط لديك. اطلب من المسؤول بدء الاختبار أو اضغط زر البدء في المجموعة أولاً.")
@@ -690,8 +687,8 @@ async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE
         pass
     # notify admins with detailed result
     admins = ADMIN_IDS
-    summary_text = f"📥 نتيجة اختبار للمستخدم {first_name} (@{username})\nالاختبار: {load_quizzes().get(quiz_id,{}).get('title','')}\nالنتيجة: {correct_count}/{total}\nوقت الإنهاء: {datetime.now().isoformat()}\n"
-    # include per-question details (limited)
+    quiz_title = load_quizzes().get(quiz_id,{}).get('title','')
+    summary_text = f"📥 نتيجة اختبار للمستخدم {first_name} (@{username})\nالاختبار: {quiz_title}\nالنتيجة: {correct_count}/{total}\nوقت الإنهاء: {datetime.now().isoformat()}\n"
     for a in session.get("answers", []):
         qtext = a.get("question_text","")
         sel = a.get("selected_text","")
@@ -724,11 +721,20 @@ async def group_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         # inform in group that user started (no personal data)
         await query.message.reply_text(f"✅ {user.first_name} بدأ الاختبار في الخاص.")
     except Exception:
-        # if bot cannot message user privately, ask user to start bot in private
         try:
             await query.message.reply_text(f"⚠️ لم أتمكن من إرسال رسالة خاصة لـ {user.first_name}. اطلب منه الضغط على /start في الخاص ثم أعد المحاولة.")
         except Exception:
             pass
+
+# ---------------------------
+# Cancel handler (مفقود سابقاً وتمت إضافته)
+# ---------------------------
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message:
+        await update.message.reply_text("تم الإلغاء.")
+    elif update.callback_query:
+        await update.callback_query.answer("تم الإلغاء.")
+    return ConversationHandler.END
 
 # ---------------------------
 # Register handlers and run
@@ -754,8 +760,10 @@ def main() -> None:
             QUESTION_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, question_options_handler)],
             QUESTION_CORRECT: [CallbackQueryHandler(question_correct_handler, pattern="^correct_")],
             QUESTION_ADD_MORE: [CallbackQueryHandler(question_add_more_handler, pattern="^(add_more|finish_quiz)$")],
-            PREVIEW_STATE: [CallbackQueryHandler(preview_callback_handler, pattern="^(start_seq_|sharegroup_|new_quiz|back_admin)$"),
-                            CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_")],
+            PREVIEW_STATE: [
+                CallbackQueryHandler(preview_callback_handler, pattern="^(start_seq_|sharegroup_|new_quiz|back_admin)$"),
+                CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_"),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
@@ -764,15 +772,18 @@ def main() -> None:
     # Basic commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("admin", lambda u, c: None))  # placeholder if needed
+    # /admin command to show admin keyboard
+    async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await require_admin_private(update, context):
+            return
+        await update.message.reply_text("🔐 لوحة التحكم:", reply_markup=build_admin_keyboard())
+    app.add_handler(CommandHandler("admin", admin_cmd))
 
     # Admin menu buttons
     app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^(new_quiz|quiz_results|list_groups|list_users|settings|toggle_anonymous|back_admin)$"))
     # Results selection
     app.add_handler(CallbackQueryHandler(result_callback, pattern="^result_"))
     # Preview send to group
-    app.add_handler(CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_"))
-    # Group announcement send
     app.add_handler(CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_"))
     # Group start button
     app.add_handler(CallbackQueryHandler(group_start_handler, pattern="^group_start_"))
