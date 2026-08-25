@@ -67,7 +67,7 @@ def track_user(user):
     users = load_users()
     uid = str(user.id)
     if uid not in users:
-        users[uid] = {"first_name": user.first_name or "بدون", "username": user.username or "", "total_messages": 0, "first_seen": datetime.now().isoformat()}
+        users[uid] = {"first_name": user.first_name or "بدون", "username": user.username or "", "total_messages": 0}
     users[uid]["total_messages"] = users[uid].get("total_messages", 0) + 1
     if user.username:
         users[uid]["username"] = user.username
@@ -78,7 +78,7 @@ def track_group(chat):
         groups = load_groups()
         gid = str(chat.id)
         if gid not in groups:
-            groups[gid] = {"title": chat.title or "بدون", "added_at": datetime.now().isoformat()}
+            groups[gid] = {"title": chat.title or "بدون"}
             save_groups(groups)
 
 def build_admin_keyboard():
@@ -421,7 +421,7 @@ async def send_poll(chat_id, context, quiz_id):
     options = quiz['options']
     correct_option = quiz.get('correct_option')
     duration = quiz.get('duration', 60)
-    is_anonymous = settings.get('allow_anonymous', False)  # افتراضي علني لتتبع النتائج
+    is_anonymous = settings.get('allow_anonymous', False)
     if correct_option is not None:
         message = await context.bot.send_poll(
             chat_id=chat_id,
@@ -467,3 +467,6 @@ async def poll_answer_handler(update, context):
                 "selected_option": selected_option if selected_option is not None else "بدون",
                 "is_correct": is_correct,
                 "answered_at": datetime.now().isoformat()
+            })
+            save_results(results)
+            q['participants'] = q.get('participants', 0) + 1
