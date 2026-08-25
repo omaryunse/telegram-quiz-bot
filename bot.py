@@ -1,6 +1,7 @@
 # bot.py
 import os
 import json
+import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -24,7 +25,7 @@ from telegram.constants import ChatType
 # Configuration (ضع التوكن يدوياً هنا)
 # ---------------------------
 TOKEN = "8845301824:AAGptI-Na__Tp0ZbFgvQ-HSfHOawDCuhFK4"
-# قائمة المسؤولين الثلاثة فقط
+# المسؤولون الثلاثة فقط
 ADMIN_IDS = ["7021041990", "8810965759", "7020921829"]
 
 # ملفات التخزين المحلية (JSON)
@@ -37,24 +38,34 @@ RESULTS_FILE = "results.json"
 # Conversation states for quiz creation
 (
     QUIZ_TITLE,
-    ADD_QUESTION_TEXT,
-    ADD_QUESTION_OPTIONS,
-    ADD_QUESTION_CORRECT,
-    ASK_ADD_MORE,
-    SET_DURATION,
-    PREVIEW,
-) = range(7)
+    QUIZ_DESCRIPTION,
+    QUIZ_DURATION,
+    QUESTION_TEXT,
+    QUESTION_OPTIONS,
+    QUESTION_CORRECT,
+    QUESTION_ADD_MORE,
+    PREVIEW_STATE,
+) = range(8)
+
+# In-memory active sessions for sequential quizzes (per user)
+ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+# ---------------------------
+# Logging
+# ---------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ---------------------------
 # JSON utilities
 # ---------------------------
 def load_json(path: str) -> Dict[str, Any]:
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            try:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-            except Exception:
-                return {}
+        except Exception:
+            return {}
     return {}
 
 def save_json(path: str, data: Dict[str, Any]) -> None:
@@ -74,11 +85,11 @@ def save_users(data: Dict[str, Any]) -> None:
     save_json(USERS_FILE, data)
 
 def load_settings() -> Dict[str, Any]:
-    settings = load_json(SETTINGS_FILE)
-    if not settings:
-        settings = {"allow_anonymous": False, "bot_name": "Quiz Bot"}
-        save_settings(settings)
-    return settings
+    s = load_json(SETTINGS_FILE)
+    if not s:
+        s = {"allow_anonymous": False, "bot_name": "Quiz Bot"}
+        save_settings(s)
+    return s
 
 def save_settings(data: Dict[str, Any]) -> None:
     save_json(SETTINGS_FILE, data)
@@ -131,19 +142,16 @@ def track_group(chat) -> None:
             groups[gid] = {"title": chat.title or "بدون"}
             save_groups(groups)
 
-# Decorator-like check for handlers to restrict to admins
-async def require_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def require_admin_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Return True if the user is admin; if not, send a private notice and return False."""
     user = update.effective_user if update.effective_user else (update.callback_query.from_user if update.callback_query else None)
     if not user or not is_admin_user(user.id):
-        # For private chats: inform user bot is for admins only
+        # If private chat, inform user it's admin-only
         if update.effective_chat and update.effective_chat.type == ChatType.PRIVATE:
             if update.message:
-                await update.message.reply_text("⚠️ هذا البوت خاص بالمسؤولين فقط. لا يمكنك استخدامه.")
+                await update.message.reply_text("⚠️ هذا البوت مخصص للمسؤولين فقط. لا يمكنك استخدامه هنا.")
             elif update.callback_query:
-                await update.callback_query.answer("هذا البوت خاص بالمسؤولين فقط.", show_alert=True)
-        else:
-            # In groups, do nothing (or track)
-            pass
+                await update.callback_query.answer("هذا البوت مخصص للمسؤولين فقط.", show_alert=True)
         return False
     return True
 
@@ -170,7 +178,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat and update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         track_group(update.effective_chat)
         if update.message:
-            await update.message.reply_text("👋 أهلاً! تم تسجيل المجموعة. استخدم البوت في الخاص لإدارة الاختبارات (للمسؤولين).")
+            await update.message.reply_text("👋 تم تسجيل المجموعة. لبدء الاختبارات من هنا، استخدم لوحة التحكم في الخاص (للمسؤولين).")
         return
     # Private chat
     user = update.effective_user
@@ -180,14 +188,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         settings = load_settings()
         await update.message.reply_text(f"🔐 {settings.get('bot_name','Quiz Bot')} - لوحة التحكم", reply_markup=build_admin_keyboard())
     else:
-        await update.message.reply_text("⚠️ هذا البوت خاص بالمسؤولين فقط. لا يمكنك تفعيله أو استخدامه.")
+        await update.message.reply_text("⚠️ هذا البوت مخصص للمسؤولين فقط. لا يمكنك تفعيله هنا.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return
     text = (
         "/start - افتح لوحة التحكم\n"
-        "/newquiz - إنشاء اختبار جديد\n"
+        "/newquiz - إنشاء مجموعة أسئلة جديدة\n"
         "/help - عرض المساعدة"
     )
     await update.message.reply_text(text)
@@ -199,16 +207,16 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.answer()
     # require admin
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return
     track_user(query.from_user)
     data = query.data
 
     if data == "new_quiz":
         # initialize builder
-        context.user_data["building_quiz"] = {"title": "", "questions": [], "duration": 60}
+        context.user_data["building_quiz"] = {"title": "", "description": "", "duration": 60, "questions": []}
         await query.message.reply_text("✍️ أرسل عنوان مجموعة الأسئلة (اسم الاختبار):")
-        return QUIZ_TITLE
+        return
 
     if data == "quiz_results":
         await show_quiz_results(query)
@@ -280,7 +288,7 @@ async def result_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
     await query.answer()
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return
     qid = query.data.replace("result_", "")
     results = load_results().get(qid, [])
@@ -289,81 +297,121 @@ async def result_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not results:
         await query.message.reply_text("لا توجد نتائج لهذا الاختبار بعد.")
         return
-    correct_count = sum(1 for r in results if r.get("is_correct"))
-    wrong_count = len(results) - correct_count
-    text = f"📊 نتائج: {quiz.get('title','')}\n\n"
-    text += f"👥 عدد المشاركين: {len(results)}\n"
-    text += f"✅ إجابات صحيحة: {correct_count}\n"
-    text += f"❌ إجابات خاطئة: {wrong_count}\n\n"
-    text += "التفاصيل:\n"
+    # aggregate per user
+    per_user: Dict[str, Dict[str, Any]] = {}
     for r in results:
-        username = f"@{r.get('username')}" if r.get('username') else "بدون"
-        status = "✅" if r.get("is_correct") else "❌"
-        text += f"{status} {r.get('first_name','')} ({username}) - السؤال: {r.get('question_text','')} - اختار: {r.get('selected_text','')}\n"
+        uid = str(r.get("user_id"))
+        if uid not in per_user:
+            per_user[uid] = {"first_name": r.get("first_name",""), "username": r.get("username",""), "answers": [], "correct": 0}
+        per_user[uid]["answers"].append(r)
+        if r.get("is_correct"):
+            per_user[uid]["correct"] += 1
+    text = f"📊 نتائج: {quiz.get('title','')}\n\n"
+    text += f"👥 عدد المشاركين: {len(per_user)}\n\n"
+    for uid, info in per_user.items():
+        username = f"@{info.get('username')}" if info.get("username") else "بدون"
+        text += f"• {info.get('first_name','')} ({username}) - إجابات صحيحة: {info.get('correct')} - إجابات: {len(info.get('answers',[]))}\n"
     await query.message.reply_text(text)
 
 # ---------------------------
-# Quiz creation flow
+# Quiz creation flow handlers
 # ---------------------------
+async def newquiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
+        return
+    context.user_data["building_quiz"] = {"title": "", "description": "", "duration": 60, "questions": []}
+    await update.message.reply_text("✍️ أرسل عنوان مجموعة الأسئلة (اسم الاختبار):")
+    return QUIZ_TITLE
+
 async def quiz_title_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return ConversationHandler.END
     text = update.message.text.strip() if update.message and update.message.text else ""
     if not text:
         await update.message.reply_text("⚠️ العنوان لا يمكن أن يكون فارغاً. أعد الإرسال:")
         return QUIZ_TITLE
-    context.user_data["building_quiz"] = {"title": text, "questions": [], "duration": 60}
-    await update.message.reply_text("✍️ أرسل نص السؤال الأول:")
-    return ADD_QUESTION_TEXT
+    context.user_data["building_quiz"]["title"] = text
+    await update.message.reply_text("📝 أرسل وصف الاختبار (أو اكتب /skip لوضع وصف فارغ):")
+    return QUIZ_DESCRIPTION
 
-async def add_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update, context):
+async def quiz_description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
+        return ConversationHandler.END
+    text = update.message.text.strip() if update.message and update.message.text else ""
+    context.user_data["building_quiz"]["description"] = text
+    await update.message.reply_text("⏳ اختر مدة الإجابة لكل سؤال (بالثواني):\n30, 60, 120, 300, 600\nأو اكتب الرقم مباشرة (مثال: 60)")
+    return QUIZ_DURATION
+
+async def quiz_skip_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
+        return ConversationHandler.END
+    context.user_data["building_quiz"]["description"] = ""
+    await update.message.reply_text("⏳ اختر مدة الإجابة لكل سؤال (بالثواني):\n30, 60, 120, 300, 600\nأو اكتب الرقم مباشرة (مثال: 60)")
+    return QUIZ_DURATION
+
+async def quiz_duration_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
+        return ConversationHandler.END
+    text = update.message.text.strip() if update.message and update.message.text else ""
+    try:
+        dur = int(text)
+        if dur <= 0:
+            raise ValueError
+    except Exception:
+        await update.message.reply_text("⚠️ قيمة غير صحيحة. أرسل مدة بالثواني مثل 30 أو 60 أو 120.")
+        return QUIZ_DURATION
+    context.user_data["building_quiz"]["duration"] = dur
+    await update.message.reply_text("✍️ الآن أرسل نص السؤال الأول:")
+    return QUESTION_TEXT
+
+async def question_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
         return ConversationHandler.END
     text = update.message.text.strip() if update.message and update.message.text else ""
     if not text:
         await update.message.reply_text("⚠️ نص السؤال لا يمكن أن يكون فارغاً. أعد الإرسال:")
-        return ADD_QUESTION_TEXT
+        return QUESTION_TEXT
     context.user_data["current_question"] = {"text": text, "options": [], "correct": None}
     await update.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر). الحد الأدنى 2 والحد الأقصى 10:")
-    return ADD_QUESTION_OPTIONS
+    return QUESTION_OPTIONS
 
-async def add_question_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update, context):
+async def question_options_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin_private(update, context):
         return ConversationHandler.END
     text = update.message.text if update.message and update.message.text else ""
     options = [line.strip() for line in text.splitlines() if line.strip()]
     if len(options) < 2:
         await update.message.reply_text("⚠️ يجب أن يكون هناك خياران على الأقل. أعد إرسال الخيارات:")
-        return ADD_QUESTION_OPTIONS
+        return QUESTION_OPTIONS
     if len(options) > 10:
         await update.message.reply_text("⚠️ الحد الأقصى 10 خيارات. أعد إرسال الخيارات:")
-        return ADD_QUESTION_OPTIONS
+        return QUESTION_OPTIONS
     context.user_data["current_question"]["options"] = options
     # build keyboard for correct option
     keyboard = []
     for i, opt in enumerate(options):
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"setcorrect_{i}")])
-    keyboard.append([InlineKeyboardButton("بدون إجابة صحيحة", callback_data="setcorrect_none")])
+        keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"correct_{i}")])
+    keyboard.append([InlineKeyboardButton("بدون إجابة صحيحة", callback_data="correct_none")])
     await update.message.reply_text("✅ اختر الإجابة الصحيحة (أو اختر بدون إجابة صحيحة):", reply_markup=InlineKeyboardMarkup(keyboard))
-    return ADD_QUESTION_CORRECT
+    return QUESTION_CORRECT
 
-async def set_correct_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def question_correct_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return ConversationHandler.END
     await query.answer()
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return ConversationHandler.END
     data = query.data
-    if data == "setcorrect_none":
+    if data == "correct_none":
         context.user_data["current_question"]["correct"] = None
     else:
         try:
-            idx = int(data.replace("setcorrect_", ""))
+            idx = int(data.replace("correct_", ""))
             context.user_data["current_question"]["correct"] = idx
         except Exception:
             context.user_data["current_question"]["correct"] = None
-    # append question to quiz
+    # append question
     bq = context.user_data.get("building_quiz", {"questions": []})
     bq["questions"].append(context.user_data["current_question"])
     context.user_data["building_quiz"] = bq
@@ -374,69 +422,45 @@ async def set_correct_option(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("✅ إنهاء وإنشاء الاختبار", callback_data="finish_quiz")],
     ]
     await query.message.reply_text("هل تريد إضافة سؤال آخر أم إنهاء مجموعة الأسئلة؟", reply_markup=InlineKeyboardMarkup(keyboard))
-    return ASK_ADD_MORE
+    return QUESTION_ADD_MORE
 
-async def ask_add_more_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def question_add_more_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return ConversationHandler.END
     await query.answer()
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return ConversationHandler.END
     data = query.data
     if data == "add_more":
         await query.message.reply_text("✍️ أرسل نص السؤال التالي:")
-        return ADD_QUESTION_TEXT
+        return QUESTION_TEXT
     if data == "finish_quiz":
-        # ask duration
+        # save quiz and preview
+        bq = context.user_data.get("building_quiz", {})
+        quiz_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        quizzes = load_quizzes()
+        quizzes[quiz_id] = {
+            "title": bq.get("title", ""),
+            "description": bq.get("description", ""),
+            "duration": bq.get("duration", 60),
+            "questions": bq.get("questions", []),
+            "created_at": datetime.now().isoformat(),
+        }
+        save_quizzes(quizzes)
+        context.user_data["last_quiz_id"] = quiz_id
+        preview_text = f"📋 تم إنشاء مجموعة الأسئلة:\n\n❓ {bq.get('title','')}\nعدد الأسئلة: {len(bq.get('questions',[]))}\nمدة السؤال: {bq.get('duration',60)} ثانية\n\nيمكنك الآن:"
         keyboard = [
-            [InlineKeyboardButton("⏱️ 30 ثانية", callback_data="dur_30")],
-            [InlineKeyboardButton("⏱️ دقيقة", callback_data="dur_60")],
-            [InlineKeyboardButton("⏱️ دقيقتان", callback_data="dur_120")],
-            [InlineKeyboardButton("⏱️ 5 دقائق", callback_data="dur_300")],
-            [InlineKeyboardButton("⏱️ 10 دقائق", callback_data="dur_600")],
+            [InlineKeyboardButton("🚀 بدء الاختبار هنا (تتابعي في الخاص)", callback_data=f"start_seq_{quiz_id}")],
+            [InlineKeyboardButton("📤 إرسال للمجموعة", callback_data=f"sharegroup_{quiz_id}")],
+            [InlineKeyboardButton("➕ إنشاء مجموعة جديدة", callback_data="new_quiz")],
+            [InlineKeyboardButton("↩️ رجوع للوحة", callback_data="back_admin")],
         ]
-        await query.message.reply_text("⏳ اختر مدة الإجابة لكل سؤال (بالثواني):", reply_markup=InlineKeyboardMarkup(keyboard))
-        return SET_DURATION
+        await query.message.reply_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # clear building state
+        context.user_data.pop("building_quiz", None)
+        return PREVIEW_STATE
     return ConversationHandler.END
-
-async def set_duration_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-    await query.answer()
-    if not await require_admin(update, context):
-        return ConversationHandler.END
-    data = query.data
-    try:
-        dur = int(data.replace("dur_", ""))
-    except Exception:
-        dur = 60
-    bq = context.user_data.get("building_quiz", {"questions": []})
-    bq["duration"] = dur
-    # save quiz
-    quiz_id = datetime.now().strftime("%Y%m%d%H%M%S")
-    quizzes = load_quizzes()
-    quizzes[quiz_id] = {
-        "title": bq.get("title", ""),
-        "questions": bq.get("questions", []),
-        "duration": bq.get("duration", 60),
-        "created_at": datetime.now().isoformat(),
-    }
-    save_quizzes(quizzes)
-    context.user_data["last_quiz_id"] = quiz_id
-    # preview
-    preview_text = f"📋 تم إنشاء مجموعة الأسئلة:\n\n❓ {bq.get('title','')}\nعدد الأسئلة: {len(bq.get('questions',[]))}\nمدة السؤال: {bq.get('duration',60)} ثانية\n\nيمكنك الآن:\n"
-    keyboard = [
-        [InlineKeyboardButton("🚀 بدء الاختبار هنا (تتابعي)", callback_data=f"start_seq_{quiz_id}")],
-        [InlineKeyboardButton("📤 إرسال للمجموعة", callback_data=f"sharegroup_{quiz_id}")],
-        [InlineKeyboardButton("➕ إنشاء مجموعة جديدة", callback_data="new_quiz")],
-        [InlineKeyboardButton("↩️ رجوع للوحة", callback_data="back_admin")],
-    ]
-    await query.message.reply_text(preview_text, reply_markup=InlineKeyboardMarkup(keyboard))
-    # clear building state
-    context.user_data.pop("building_quiz", None)
-    return PREVIEW
 
 # Preview callbacks: start sequential quiz or share to group
 async def preview_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,13 +468,14 @@ async def preview_callback_handler(update: Update, context: ContextTypes.DEFAULT
     if not query:
         return
     await query.answer()
-    if not await require_admin(update, context):
+    if not await require_admin_private(update, context):
         return
     data = query.data
     if data.startswith("start_seq_"):
         quiz_id = data.replace("start_seq_", "")
         # start sequential session for this admin (private)
-        await start_sequential_quiz_for_user(query.from_user.id, context, quiz_id, query.message)
+        await start_sequential_quiz_for_user(query.from_user.id, context, quiz_id)
+        await query.message.reply_text("✅ بدأ الاختبار في الخاص لديك.")
         return
     if data.startswith("sharegroup_"):
         quiz_id = data.replace("sharegroup_", "")
@@ -462,48 +487,63 @@ async def preview_callback_handler(update: Update, context: ContextTypes.DEFAULT
         for gid, g in groups.items():
             keyboard.append([InlineKeyboardButton(f"{g.get('title','بدون')}", callback_data=f"sendgroup_{gid}_{quiz_id}")])
         keyboard.append([InlineKeyboardButton("↩️ رجوع", callback_data="back_admin")])
-        await query.message.reply_text("اختر المجموعة لإرسال الاختبار (سيتم إرسال كل سؤال كرسالة تتابعية):", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text("اختر المجموعة لإرسال الاختبار (سيظهر زر بدء في المجموعة):", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-
     if data == "new_quiz":
-        # start new creation
-        context.user_data["building_quiz"] = {"title": "", "questions": [], "duration": 60}
+        context.user_data["building_quiz"] = {"title": "", "description": "", "duration": 60, "questions": []}
         await query.message.reply_text("✍️ أرسل عنوان مجموعة الأسئلة الجديدة:")
         return QUIZ_TITLE
-
     if data == "back_admin":
         await query.message.edit_text("🔐 لوحة التحكم:", reply_markup=build_admin_keyboard())
         return
 
-    if data.startswith("sendgroup_"):
-        # pattern sendgroup_{gid}_{quizid}
-        parts = data.split("_", 2)
-        if len(parts) < 3:
-            await query.message.reply_text("معرف غير صالح.")
-            return
-        gid = parts[1]
-        qid = parts[2]
-        try:
-            gid_int = int(gid)
-        except Exception:
-            await query.message.reply_text("معرف المجموعة غير صالح.")
-            return
-        # send sequential quiz to group as series of messages with inline buttons for options
-        await send_sequential_quiz_to_group(gid_int, context, qid)
-        await query.message.reply_text("✅ تم إرسال الاختبار إلى المجموعة.")
+# Send group message with Start Test button
+async def send_quiz_to_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
         return
+    await query.answer()
+    if not await require_admin_private(update, context):
+        return
+    data = query.data
+    if not data.startswith("sendgroup_"):
+        return
+    parts = data.split("_", 2)
+    if len(parts) < 3:
+        await query.message.reply_text("معرف غير صالح.")
+        return
+    gid = parts[1]
+    qid = parts[2]
+    try:
+        gid_int = int(gid)
+    except Exception:
+        await query.message.reply_text("معرف المجموعة غير صالح.")
+        return
+    quizzes = load_quizzes()
+    quiz = quizzes.get(qid)
+    if not quiz:
+        await query.message.reply_text("الاختبار غير موجود.")
+        return
+    # Post an announcement in the group with a Start Test button
+    text = f"📢 اختبار جديد: {quiz.get('title','')}\n\n{quiz.get('description','')}\n\nاضغط زر 'بدء الاختبار' لبدء الاختبار في الخاص مع البوت."
+    keyboard = [[InlineKeyboardButton("🚀 بدء الاختبار", callback_data=f"group_start_{qid}")]]
+    try:
+        await context.bot.send_message(chat_id=gid_int, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text("✅ تم إرسال الإعلان إلى المجموعة.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ فشل الإرسال إلى المجموعة: {e}")
 
 # ---------------------------
-# Sequential quiz runtime (per-user session using inline buttons)
+# Sequential quiz runtime (per-user session)
 # ---------------------------
-# We'll maintain active sessions in memory (not persisted). Keyed by user_id -> session dict
-ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
-
-async def start_sequential_quiz_for_user(user_id: int, context: ContextTypes.DEFAULT_TYPE, quiz_id: str, reply_target) -> None:
+async def start_sequential_quiz_for_user(user_id: int, context: ContextTypes.DEFAULT_TYPE, quiz_id: str) -> None:
     quizzes = load_quizzes()
     quiz = quizzes.get(quiz_id)
     if not quiz:
-        await reply_target.reply_text("❌ الاختبار غير موجود.")
+        try:
+            await context.bot.send_message(chat_id=user_id, text="❌ الاختبار غير موجود.")
+        except Exception:
+            pass
         return
     # initialize session
     session = {
@@ -516,54 +556,61 @@ async def start_sequential_quiz_for_user(user_id: int, context: ContextTypes.DEF
     ACTIVE_SESSIONS[str(user_id)] = session
     # send first question to the user (private)
     try:
-        chat_id = user_id
-        await send_question_to_user(chat_id, context, quiz, 0)
-    except Exception as e:
-        await reply_target.reply_text(f"❌ فشل بدء الاختبار: {e}")
+        await send_question_to_user(user_id, context, quiz, 0)
+    except Exception:
+        # user may not have opened private chat with bot
+        # inform via admin or ignore
+        logger.exception("Failed to send first question to user %s", user_id)
 
 async def send_question_to_user(chat_id: int, context: ContextTypes.DEFAULT_TYPE, quiz: Dict[str, Any], q_index: int) -> None:
     questions = quiz.get("questions", [])
     if q_index < 0 or q_index >= len(questions):
         # finished
-        await context.bot.send_message(chat_id=chat_id, text="✅ انتهى الاختبار. شكراً لمشاركتك.")
-        # save results summary
-        await finalize_session(chat_id, context)
+        try:
+            await context.bot.send_message(chat_id=chat_id, text="✅ انتهى الاختبار. شكراً لمشاركتك.")
+            await finalize_session(chat_id, context)
+        except Exception:
+            logger.exception("Failed to finalize session for %s", chat_id)
         return
     q = questions[q_index]
     text = f"سؤال {q_index+1}/{len(questions)}:\n\n{q.get('text','')}"
     options = q.get("options", [])
     keyboard = []
     for i, opt in enumerate(options):
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"answer_{q_index}_{i}")])
-    # add skip option
-    keyboard.append([InlineKeyboardButton("تخطي السؤال", callback_data=f"answer_{q_index}_-1")])
+        keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"answer_{quiz.get('title','')}_{q_index}_{i}")])
+    keyboard.append([InlineKeyboardButton("تخطي السؤال", callback_data=f"answer_{quiz.get('title','')}_{q_index}_-1")])
     await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# Handle user's answer callbacks in sequential session
-async def sequential_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return
     await query.answer()
     user = query.from_user
-    uid = str(user.id)
-    if uid not in ACTIVE_SESSIONS:
-        await query.message.reply_text("لا يوجد اختبار نشط لديك. اطلب من المسؤول بدء الاختبار.")
+    if not user:
         return
-    session = ACTIVE_SESSIONS[uid]
-    data = query.data  # format: answer_{q_index}_{opt_index}
+    uid = str(user.id)
+    data = query.data  # format: answer_{quiztitle}_{qindex}_{opt}
     parts = data.split("_")
-    if len(parts) < 3:
+    # We used quiz title in callback to avoid underscores collision; parse from end
+    if len(parts) < 4:
         await query.message.reply_text("بيانات غير صحيحة.")
         return
+    # last two parts are qindex and opt
     try:
-        q_index = int(parts[1])
-        opt_index = int(parts[2])
+        q_index = int(parts[-2])
+        opt_index = int(parts[-1])
     except Exception:
         await query.message.reply_text("بيانات غير صحيحة.")
         return
+    # find session
+    session = ACTIVE_SESSIONS.get(uid)
+    if not session:
+        await query.message.reply_text("لا يوجد اختبار نشط لديك. اطلب من المسؤول بدء الاختبار أو اضغط زر البدء في المجموعة أولاً.")
+        return
+    quiz_id = session.get("quiz_id")
     quizzes = load_quizzes()
-    quiz = quizzes.get(session["quiz_id"])
+    quiz = quizzes.get(quiz_id)
     if not quiz:
         await query.message.reply_text("الاختبار غير موجود.")
         ACTIVE_SESSIONS.pop(uid, None)
@@ -586,20 +633,23 @@ async def sequential_answer_handler(update: Update, context: ContextTypes.DEFAUL
         "is_correct": is_correct,
         "answered_at": datetime.now().isoformat(),
     })
-    # advance index
     session["current_index"] = q_index + 1
-    # save partial results to persistent storage (optional)
-    # send feedback and next question
+    # feedback
     feedback = "✅ إجابة صحيحة!" if is_correct else ("⚠️ إجابة خاطئة." if opt_index != -1 else "⚠️ تم تخطي السؤال.")
-    await query.message.reply_text(feedback)
-    # send next question or finish
+    try:
+        await context.bot.send_message(chat_id=user.id, text=feedback)
+    except Exception:
+        logger.exception("Failed to send feedback to user %s", user.id)
+    # next question or finish
     next_index = session["current_index"]
     if next_index >= len(questions):
-        await context.bot.send_message(chat_id=user.id, text="✅ انتهى الاختبار. جاري حفظ النتائج...")
+        try:
+            await context.bot.send_message(chat_id=user.id, text="✅ انتهى الاختبار. جاري حفظ النتائج...")
+        except Exception:
+            pass
         await finalize_session(user.id, context)
         ACTIVE_SESSIONS.pop(uid, None)
         return
-    # send next
     await send_question_to_user(user.id, context, quiz, next_index)
 
 async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -611,127 +661,77 @@ async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE
     results = load_results()
     if quiz_id not in results:
         results[quiz_id] = []
-    # store each answer as separate record for reporting
-    for ans in session.get("answers", []):
-        results[quiz_id].append({
-            "user_id": user_chat_id,
-            "first_name": context.bot.get_chat(user_chat_id).first_name if context.bot.get_chat(user_chat_id) else "",
-            "username": context.bot.get_chat(user_chat_id).username if context.bot.get_chat(user_chat_id) else "",
-            "question_index": ans.get("question_index"),
-            "question_text": ans.get("question_text"),
-            "selected_index": ans.get("selected_index"),
-            "selected_text": ans.get("selected_text"),
-            "is_correct": ans.get("is_correct"),
-            "answered_at": ans.get("answered_at"),
-        })
+    # store summary per user (one entry summarizing their session)
+    correct_count = sum(1 for a in session.get("answers", []) if a.get("is_correct"))
+    total = len(session.get("answers", []))
+    # try to get user info
+    first_name = ""
+    username = ""
+    try:
+        chat = await context.bot.get_chat(user_chat_id)
+        first_name = chat.first_name or ""
+        username = chat.username or ""
+    except Exception:
+        pass
+    results[quiz_id].append({
+        "user_id": user_chat_id,
+        "first_name": first_name,
+        "username": username,
+        "correct": correct_count,
+        "total_answered": total,
+        "answers": session.get("answers", []),
+        "finished_at": datetime.now().isoformat(),
+    })
     save_results(results)
+    # send summary to user
+    try:
+        await context.bot.send_message(chat_id=user_chat_id, text=f"📊 انتهى الاختبار. إجابات صحيحة: {correct_count} من {total}. شكراً لمشاركتك.")
+    except Exception:
+        pass
+    # notify admins with detailed result
+    admins = ADMIN_IDS
+    summary_text = f"📥 نتيجة اختبار للمستخدم {first_name} (@{username})\nالاختبار: {load_quizzes().get(quiz_id,{}).get('title','')}\nالنتيجة: {correct_count}/{total}\nوقت الإنهاء: {datetime.now().isoformat()}\n"
+    # include per-question details (limited)
+    for a in session.get("answers", []):
+        qtext = a.get("question_text","")
+        sel = a.get("selected_text","")
+        ok = "✅" if a.get("is_correct") else "❌"
+        summary_text += f"\n{ok} {qtext}\n→ إجابة: {sel}\n"
+    for admin_id in admins:
+        try:
+            await context.bot.send_message(chat_id=int(admin_id), text=summary_text)
+        except Exception:
+            logger.exception("Failed to send result to admin %s", admin_id)
 
-# Send sequential quiz to a group: posts questions one by one to the group; users answer via inline buttons (session per user still tracked)
-async def send_sequential_quiz_to_group(group_id: int, context: ContextTypes.DEFAULT_TYPE, quiz_id: str):
-    quizzes = load_quizzes()
-    quiz = quizzes.get(quiz_id)
-    if not quiz:
-        return
-    # For group mode, we will post the first question to the group; each user who clicks will start their own session
-    q0 = quiz.get("questions", [])[0] if quiz.get("questions") else None
-    if not q0:
-        await context.bot.send_message(chat_id=group_id, text="لا توجد أسئلة في هذا الاختبار.")
-        return
-    text = f"📢 اختبار: {quiz.get('title','')}\n\nالسؤال 1: {q0.get('text','')}\n\nاضغط على خيارك لبدء المشاركة (كل مشارك سيجيب تتابعياً على الأسئلة)."
-    keyboard = []
-    for i, opt in enumerate(q0.get("options", [])):
-        # callback will start a session for that user and record answer 0
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"group_answer_{quiz_id}_0_{i}")])
-    keyboard.append([InlineKeyboardButton("تخطي السؤال", callback_data=f"group_answer_{quiz_id}_0_-1")])
-    await context.bot.send_message(chat_id=group_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# Handle group answer callbacks: start or continue session for that user
-async def group_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------------------
+# Group start button handler
+# ---------------------------
+async def group_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return
     await query.answer()
+    data = query.data  # format: group_start_{quizid}
+    if not data.startswith("group_start_"):
+        return
+    quiz_id = data.replace("group_start_", "")
     user = query.from_user
     if not user:
         return
-    data = query.data  # format: group_answer_{quizid}_{qindex}_{opt}
-    parts = data.split("_", 3)
-    if len(parts) < 4:
-        await query.message.reply_text("بيانات غير صحيحة.")
-        return
-    _, _, quiz_id, rest = parts[0], parts[1], parts[2], parts[3]
-    # rest contains "{qindex}_{opt}"
+    # attempt to start private session for this user
     try:
-        qindex_str, opt_str = rest.split("_", 1)
-        qindex = int(qindex_str)
-        opt_index = int(opt_str)
+        await start_sequential_quiz_for_user(user.id, context, quiz_id)
+        # inform in group that user started (no personal data)
+        await query.message.reply_text(f"✅ {user.first_name} بدأ الاختبار في الخاص.")
     except Exception:
-        await query.message.reply_text("بيانات غير صحيحة.")
-        return
-    uid = str(user.id)
-    # ensure session exists for this user and quiz
-    session = ACTIVE_SESSIONS.get(uid)
-    if not session or session.get("quiz_id") != quiz_id:
-        # start new session for this user and quiz
-        ACTIVE_SESSIONS[uid] = {
-            "quiz_id": quiz_id,
-            "user_id": user.id,
-            "current_index": 0,
-            "answers": [],
-            "started_at": datetime.now().isoformat(),
-        }
-        session = ACTIVE_SESSIONS[uid]
-    # emulate same logic as sequential_answer_handler but using group context
-    quizzes = load_quizzes()
-    quiz = quizzes.get(quiz_id)
-    if not quiz:
-        await query.message.reply_text("الاختبار غير موجود.")
-        return
-    questions = quiz.get("questions", [])
-    if qindex < 0 or qindex >= len(questions):
-        await query.message.reply_text("السؤال غير موجود.")
-        return
-    q = questions[qindex]
-    selected_text = "تخطي" if opt_index == -1 else (q.get("options", [])[opt_index] if 0 <= opt_index < len(q.get("options", [])) else "غير معروف")
-    is_correct = False
-    if q.get("correct") is not None and opt_index != -1:
-        is_correct = (opt_index == q.get("correct"))
-    session["answers"].append({
-        "question_index": qindex,
-        "question_text": q.get("text", ""),
-        "selected_index": opt_index,
-        "selected_text": selected_text,
-        "is_correct": is_correct,
-        "answered_at": datetime.now().isoformat(),
-    })
-    session["current_index"] = qindex + 1
-    # send feedback privately to user and next question privately
-    try:
-        feedback = "✅ إجابة صحيحة!" if is_correct else ("⚠️ إجابة خاطئة." if opt_index != -1 else "⚠️ تم تخطي السؤال.")
-        await context.bot.send_message(chat_id=user.id, text=f"ردك على السؤال {qindex+1}: {feedback}\nسوف يتم إرسال السؤال التالي هنا في الخاص.")
-        # send next question privately
-        next_index = session["current_index"]
-        if next_index >= len(questions):
-            await context.bot.send_message(chat_id=user.id, text="✅ انتهى الاختبار. جاري حفظ النتائج...")
-            await finalize_session(user.id, context)
-            ACTIVE_SESSIONS.pop(uid, None)
-            await query.message.reply_text(f"تمت مشاركة إجابة {user.first_name}. انتهى الاختبار لديهم.")
-            return
-        await send_question_to_user(user.id, context, quiz, next_index)
-        await query.message.reply_text(f"تم تسجيل إجابة {user.first_name}. السؤال التالي أُرسل في الخاص.")
-    except Exception:
-        await query.message.reply_text("تعذر إرسال السؤال التالي في الخاص للمستخدم (ربما أغلق المحادثة).")
-
-# Cancel handler
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await update.message.reply_text("تم الإلغاء.")
-    elif update.callback_query:
-        await update.callback_query.answer("تم الإلغاء.")
-    return ConversationHandler.END
+        # if bot cannot message user privately, ask user to start bot in private
+        try:
+            await query.message.reply_text(f"⚠️ لم أتمكن من إرسال رسالة خاصة لـ {user.first_name}. اطلب منه الضغط على /start في الخاص ثم أعد المحاولة.")
+        except Exception:
+            pass
 
 # ---------------------------
-# Main: register handlers and run
+# Register handlers and run
 # ---------------------------
 def main() -> None:
     if TOKEN == "" or TOKEN == "PUT_YOUR_TOKEN_HERE":
@@ -740,59 +740,49 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # Conversation handler for quiz creation flow
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_button_handler, pattern="^new_quiz$"),
-            CommandHandler("newquiz", lambda u, c: new_quiz_command_wrapper(u, c)),
-        ],
+    # Conversation handler for quiz creation
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("newquiz", newquiz_command), CallbackQueryHandler(admin_button_handler, pattern="^new_quiz$")],
         states={
             QUIZ_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_title_handler)],
-            ADD_QUESTION_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_question_text)],
-            ADD_QUESTION_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_question_options)],
-            ADD_QUESTION_CORRECT: [CallbackQueryHandler(set_correct_option, pattern="^setcorrect_")],
-            ASK_ADD_MORE: [CallbackQueryHandler(ask_add_more_handler, pattern="^(add_more|finish_quiz)$")],
-            SET_DURATION: [CallbackQueryHandler(set_duration_handler, pattern="^dur_")],
-            PREVIEW: [CallbackQueryHandler(preview_callback_handler, pattern="^(start_seq_|sharegroup_|new_quiz|back_admin|sendgroup_).*")],
+            QUIZ_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_description_handler),
+                CommandHandler("skip", quiz_skip_description),
+            ],
+            QUIZ_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_duration_handler)],
+            QUESTION_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, question_text_handler)],
+            QUESTION_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, question_options_handler)],
+            QUESTION_CORRECT: [CallbackQueryHandler(question_correct_handler, pattern="^correct_")],
+            QUESTION_ADD_MORE: [CallbackQueryHandler(question_add_more_handler, pattern="^(add_more|finish_quiz)$")],
+            PREVIEW_STATE: [CallbackQueryHandler(preview_callback_handler, pattern="^(start_seq_|sharegroup_|new_quiz|back_admin)$"),
+                            CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
     )
 
-    # wrapper for /newquiz to ensure admin
-    async def new_quiz_command_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await require_admin(update, context):
-            return ConversationHandler.END
-        # simulate pressing new_quiz
-        context.user_data["building_quiz"] = {"title": "", "questions": [], "duration": 60}
-        await update.message.reply_text("✍️ أرسل عنوان مجموعة الأسئلة (اسم الاختبار):")
-        return QUIZ_TITLE
-
-    # Register handlers
+    # Basic commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("admin", lambda u, c: admin_command_wrapper(u, c)))
-    # admin menu general buttons
-    app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^(new_quiz|quiz_results|list_groups|list_users|settings|toggle_anonymous|change_bot_name|back_admin)$"))
-    # results selection
+    app.add_handler(CommandHandler("admin", lambda u, c: None))  # placeholder if needed
+
+    # Admin menu buttons
+    app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^(new_quiz|quiz_results|list_groups|list_users|settings|toggle_anonymous|back_admin)$"))
+    # Results selection
     app.add_handler(CallbackQueryHandler(result_callback, pattern="^result_"))
-    # preview and send group callbacks
-    app.add_handler(CallbackQueryHandler(preview_callback_handler, pattern="^(start_seq_|sharegroup_|new_quiz|back_admin|sendgroup_).*"))
-    # sequential answer handlers (private)
-    app.add_handler(CallbackQueryHandler(sequential_answer_handler, pattern="^answer_"))
-    # group answer handlers
-    app.add_handler(CallbackQueryHandler(group_answer_handler, pattern="^group_answer_"))
-    # conv handler for creation
-    app.add_handler(conv_handler)
+    # Preview send to group
+    app.add_handler(CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_"))
+    # Group announcement send
+    app.add_handler(CallbackQueryHandler(send_quiz_to_group_callback, pattern="^sendgroup_"))
+    # Group start button
+    app.add_handler(CallbackQueryHandler(group_start_handler, pattern="^group_start_"))
+    # Answer handlers (private sequential)
+    app.add_handler(CallbackQueryHandler(answer_handler, pattern="^answer_"))
+    # Conversation handler
+    app.add_handler(conv)
 
     print("البوت يعمل الآن...")
     app.run_polling()
-
-# small wrapper for /admin command to show admin keyboard if admin
-async def admin_command_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update, context):
-        return
-    await update.message.reply_text("🔐 لوحة التحكم:", reply_markup=build_admin_keyboard())
 
 if __name__ == "__main__":
     main()
