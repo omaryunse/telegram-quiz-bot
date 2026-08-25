@@ -5,7 +5,9 @@ import json
 import os
 from datetime import datetime
 
-TOKEN = "8845301824:AAE02vGKIeP4pLNDD_aww1gwkMPf0lY1mQs"
+# ====== ضع التوكن الجديد هنا ======
+TOKEN = "8845301824:AAGptI-Na__Tp0ZbFgvQ-HSfHOawDCuhFK4"
+
 ADMIN_IDS = ["7021041990", "8810965759", "7020921829"]
 
 QUIZZES_FILE = "quizzes.json"
@@ -469,4 +471,4 @@ async def poll_answer_handler(update, context):
                 "answered_at": datetime.now().isoformat()
             })
             save_results(results)
-            q['participants'] = q.get('participants', 0) + 1
+            q['participants'] = q.get('participants', 0
