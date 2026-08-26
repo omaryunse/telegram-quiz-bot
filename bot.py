@@ -853,5 +853,5 @@ async def publish_to_chat(context, chat_id, quiz_id):
     text = (
         f"📣 **اختبار جديد**\n\n"
         f"📋 {quiz['title']}\n\n"
-        f"📝 {quiz['description'] or ''}\n\n"
+        f"❓ عدد الأسئلة: {len(quiz['questions'])}\n"
         f"❓ عدد الأسئلة: {len(quiz['questions
