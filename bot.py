@@ -4,67 +4,72 @@ import logging
 from datetime import datetime
 
 from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
+Update,
+InlineKeyboardButton,
+InlineKeyboardMarkup,
 )
 from telegram.constants import ChatType
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+Application,
+CommandHandler,
+CallbackQueryHandler,
+ConversationHandler,
+MessageHandler,
+ContextTypes,
+filters,
 )
 
 # =========================================================
+
 # إعدادات البوت
+
 # =========================================================
 
-BOT_TOKEN = os.getenv("8733506822:AAH9CA5_S7M0frI5hJlzNcKPsPudDyHZNSM", "PUT_YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 
 # ضع Telegram User ID الخاص بالأدمن هنا
+
 ADMIN_IDS = {
-    7021041990,
-    8810965759,
-    7020921829,
+7021041990,
+8810965759,
+7020921829,
 }
 
 DB_FILE = os.getenv("QUIZ_DB_FILE", "quiz_bot.db")
 
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
+format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+level=logging.INFO,
 )
 
 logger = logging.getLogger("QuizBot")
 
-
 # =========================================================
+
 # حالات إنشاء الاختبار
+
 # =========================================================
 
 (
-    TITLE,
-    DESCRIPTION,
-    DURATION,
-    QUESTION_TEXT,
-    QUESTION_OPTIONS,
-    QUESTION_CORRECT,
-    QUESTION_MORE,
+TITLE,
+DESCRIPTION,
+DURATION,
+QUESTION_TEXT,
+QUESTION_OPTIONS,
+QUESTION_CORRECT,
+QUESTION_MORE,
 ) = range(7)
 
-
 # =========================================================
+
 # قاعدة البيانات
+
 # =========================================================
 
 def get_db():
     conn = sqlite3.connect(
-        DB_FILE,
-        timeout=30,
+    DB_FILE,
+    timeout=30,
     )
 
     conn.row_factory = sqlite3.Row
@@ -74,7 +79,6 @@ def get_db():
     )
 
     return conn
-
 
 def init_db():
     with get_db() as conn:
@@ -143,16 +147,16 @@ def init_db():
             """
         )
 
+    # =========================================================
 
-# =========================================================
-# أدوات عامة
-# =========================================================
+    # أدوات عامة
+
+    # =========================================================
 
 def now():
     return datetime.now().isoformat(
-        timespec="seconds"
+    timespec="seconds"
     )
-
 
 def is_admin(user_id):
     try:
@@ -160,13 +164,21 @@ def is_admin(user_id):
     except (TypeError, ValueError):
         return False
 
-
 def safe_int(value, default=None):
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
 
+
+async def get_bot_username(bot):
+    """Return the bot username safely, refreshing it from Telegram if needed."""
+    try:
+        me = await bot.get_me()
+        return me.username or ""
+    except Exception:
+        logger.exception("Failed to get bot username")
+        return ""
 
 def register_user(user):
 
@@ -202,7 +214,6 @@ def register_user(user):
                 current,
             ),
         )
-
 
 def register_group(chat):
 
@@ -241,7 +252,6 @@ def register_group(chat):
                 current,
             ),
         )
-
 
 def get_quiz(quiz_id):
 
@@ -295,7 +305,6 @@ def get_quiz(quiz_id):
 
     return result
 
-
 def cancel_quiz_timer(context):
 
     job = context.user_data.get(
@@ -313,7 +322,6 @@ def cancel_quiz_timer(context):
 
     context.user_data["quiz_job"] = None
 
-
 def clear_active_quiz(context):
 
     cancel_quiz_timer(context)
@@ -323,12 +331,11 @@ def clear_active_quiz(context):
         None,
     )
 
-
 async def answer_callback(
     query,
     text=None,
     alert=False,
-):
+    ):
 
     try:
 
@@ -340,8 +347,10 @@ async def answer_callback(
     except Exception:
         pass
         # =========================================================
-# لوحة الإدارة
-# =========================================================
+
+    # لوحة الإدارة
+
+    # =========================================================
 
 def admin_keyboard():
 
@@ -387,7 +396,6 @@ def admin_keyboard():
         ]
     )
 
-
 async def send_admin_panel(message):
 
     await message.reply_text(
@@ -396,11 +404,10 @@ async def send_admin_panel(message):
         reply_markup=admin_keyboard(),
     )
 
-
 async def admin_panel_callback(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -422,15 +429,16 @@ async def admin_panel_callback(
         query.message
     )
 
+    # =========================================================
 
-# =========================================================
-# START
-# =========================================================
+    # START
+
+    # =========================================================
 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-):
+    ):
 
     user = update.effective_user
     chat = update.effective_chat
@@ -510,11 +518,10 @@ async def start(
             "اضغط «🚀 بدء الاختبار»."
         )
 
-
 async def help_command(
     update,
     context,
-):
+    ):
 
     await update.message.reply_text(
         "📚 أوامر البوت:\n\n"
@@ -524,15 +531,16 @@ async def help_command(
         "/cancel_quiz - إلغاء الاختبار الحالي"
     )
 
+    # =========================================================
 
-# =========================================================
-# إنشاء اختبار
-# =========================================================
+    # إنشاء اختبار
+
+    # =========================================================
 
 async def create_quiz_start(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -589,11 +597,10 @@ async def create_quiz_start(
 
     return TITLE
 
-
 async def handle_title(
     update,
     context,
-):
+    ):
 
     if not is_admin(
         update.effective_user.id
@@ -641,11 +648,10 @@ async def handle_title(
 
     return DESCRIPTION
 
-
 async def skip_description(
     update,
     context,
-):
+    ):
 
     build = context.user_data.get(
         "quiz_build"
@@ -663,11 +669,10 @@ async def skip_description(
 
     return DURATION
 
-
 async def handle_description(
     update,
     context,
-):
+    ):
 
     build = context.user_data.get(
         "quiz_build"
@@ -697,11 +702,10 @@ async def handle_description(
 
     return DURATION
 
-
 async def handle_duration(
     update,
     context,
-):
+    ):
 
     build = context.user_data.get(
         "quiz_build"
@@ -750,11 +754,10 @@ async def handle_duration(
 
     return QUESTION_TEXT
 
-
 async def handle_question_text(
     update,
     context,
-):
+    ):
 
     build = context.user_data.get(
         "quiz_build"
@@ -803,11 +806,10 @@ async def handle_question_text(
 
     return QUESTION_OPTIONS
 
-
 async def handle_question_options(
     update,
     context,
-):
+    ):
 
     question = context.user_data.get(
         "current_question"
@@ -910,13 +912,15 @@ async def handle_question_options(
 
     return QUESTION_CORRECT
     # =========================================================
-# تحديد الإجابة الصحيحة
-# =========================================================
+
+    # تحديد الإجابة الصحيحة
+
+    # =========================================================
 
 async def handle_correct_answer(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1024,15 +1028,16 @@ async def handle_correct_answer(
 
     return QUESTION_MORE
 
+    # =========================================================
 
-# =========================================================
-# بعد إضافة السؤال
-# =========================================================
+    # بعد إضافة السؤال
+
+    # =========================================================
 
 async def question_more(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1088,15 +1093,16 @@ async def question_more(
 
     return QUESTION_MORE
 
+    # =========================================================
 
-# =========================================================
-# معاينة الاختبار
-# =========================================================
+    # معاينة الاختبار
+
+    # =========================================================
 
 async def send_quiz_preview(
     message,
     build,
-):
+    ):
 
     lines = [
         "👀 معاينة الاختبار",
@@ -1144,15 +1150,16 @@ async def send_quiz_preview(
 
     await message.reply_text(text)
 
+    # =========================================================
 
-# =========================================================
-# حفظ الاختبار
-# =========================================================
+    # حفظ الاختبار
+
+    # =========================================================
 
 async def save_quiz(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1289,15 +1296,16 @@ async def save_quiz(
 
     return ConversationHandler.END
 
+    # =========================================================
 
-# =========================================================
-# إلغاء إنشاء الاختبار
-# =========================================================
+    # إلغاء إنشاء الاختبار
+
+    # =========================================================
 
 async def cancel_creation(
     update,
     context,
-):
+    ):
 
     context.user_data.pop(
         "quiz_build",
@@ -1315,15 +1323,16 @@ async def cancel_creation(
 
     return ConversationHandler.END
 
+    # =========================================================
 
-# =========================================================
-# مشاركة الاختبار
-# =========================================================
+    # مشاركة الاختبار
+
+    # =========================================================
 
 async def share_quiz(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1367,8 +1376,8 @@ async def share_quiz(
 
         return
 
-    bot_username = (
-        context.bot.username
+    bot_username = await get_bot_username(
+        context.bot
     )
 
     if not bot_username:
@@ -1410,15 +1419,16 @@ async def share_quiz(
         ),
     )
 
+    # =========================================================
 
-# =========================================================
-# نشر الاختبار للمجموعات
-# =========================================================
+    # نشر الاختبار للمجموعات
+
+    # =========================================================
 
 async def publish_quiz(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1520,11 +1530,10 @@ async def publish_quiz(
         ),
     )
 
-
 async def send_to_group(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1588,11 +1597,10 @@ async def send_to_group(
             "ولديه صلاحية إرسال الرسائل."
         )
 
-
 async def send_to_all(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -1664,20 +1672,19 @@ async def send_to_all(
         f"❌ فشل: {failed}"
     )
 
-
 async def publish_to_chat(
     context,
     chat_id,
     quiz_id,
-):
+    ):
 
     quiz = get_quiz(quiz_id)
 
     if not quiz:
         return False
 
-    bot_username = (
-        context.bot.username
+    bot_username = await get_bot_username(
+        context.bot
     )
 
     if not bot_username:
@@ -1744,14 +1751,16 @@ async def publish_to_chat(
 
         return False
         # =========================================================
-# بدء الاختبار من الرابط
-# =========================================================
+
+    # بدء الاختبار من الرابط
+
+    # =========================================================
 
 async def start_quiz_from_link(
     update,
     context,
     quiz_id,
-):
+    ):
 
     if (
         update.effective_chat.type
@@ -1810,15 +1819,16 @@ async def start_quiz_from_link(
         context,
     )
 
+    # =========================================================
 
-# =========================================================
-# إرسال السؤال الحالي
-# =========================================================
+    # إرسال السؤال الحالي
+
+    # =========================================================
 
 async def send_current_question(
     chat_id,
     context,
-):
+    ):
 
     session = context.user_data.get(
         "active_quiz"
@@ -1940,14 +1950,15 @@ async def send_current_question(
         },
     )
 
+    # =========================================================
 
-# =========================================================
-# انتهاء وقت السؤال
-# =========================================================
+    # انتهاء وقت السؤال
+
+    # =========================================================
 
 async def quiz_timeout(
     context,
-):
+    ):
 
     job = context.job
 
@@ -2027,16 +2038,17 @@ async def quiz_timeout(
         context,
     )
 
+    # =========================================================
 
-# =========================================================
-# إرسال السؤال باستخدام user_id
-# =========================================================
+    # إرسال السؤال باستخدام user_id
+
+    # =========================================================
 
 async def send_question_for_user(
     chat_id,
     user_id,
     context,
-):
+    ):
 
     user_data = (
         context.application.user_data.get(
@@ -2146,10 +2158,9 @@ async def send_question_for_user(
             },
         )
 
-
 def cancel_user_timer(
     user_data
-):
+    ):
 
     job = user_data.get(
         "quiz_job"
@@ -2164,15 +2175,16 @@ def cancel_user_timer(
 
     user_data["quiz_job"] = None
 
+    # =========================================================
 
-# =========================================================
-# الإجابة عن السؤال
-# =========================================================
+    # الإجابة عن السؤال
+
+    # =========================================================
 
 async def answer_quiz(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2331,15 +2343,16 @@ async def answer_quiz(
         context,
     )
 
+    # =========================================================
 
-# =========================================================
-# إلغاء الاختبار
-# =========================================================
+    # إلغاء الاختبار
+
+    # =========================================================
 
 async def cancel_active_quiz(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2370,26 +2383,26 @@ async def cancel_active_quiz(
             "ℹ️ لا يوجد اختبار نشط."
         )
 
-
 async def cancel_quiz_command(
     update,
     context,
-):
+    ):
 
     await cancel_active_quiz(
         update,
         context,
     )
 
+    # =========================================================
 
-# =========================================================
-# إنهاء الاختبار
-# =========================================================
+    # إنهاء الاختبار
+
+    # =========================================================
 
 async def finish_quiz(
     chat_id,
     context,
-):
+    ):
 
     session = context.user_data.get(
         "active_quiz"
@@ -2421,12 +2434,11 @@ async def finish_quiz(
         context,
     )
 
-
 async def finish_quiz_for_user(
     chat_id,
     user_id,
     context,
-):
+    ):
 
     user_data = (
         context.application.user_data.get(
@@ -2562,13 +2574,15 @@ async def finish_quiz_for_user(
         ),
     )
     # =========================================================
-# قائمة الاختبارات
-# =========================================================
+
+    # قائمة الاختبارات
+
+    # =========================================================
 
 async def admin_quizzes(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2667,15 +2681,16 @@ async def admin_quizzes(
         ),
     )
 
+    # =========================================================
 
-# =========================================================
-# النتائج
-# =========================================================
+    # النتائج
+
+    # =========================================================
 
 async def admin_results(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2755,15 +2770,16 @@ async def admin_results(
         text
     )
 
+    # =========================================================
 
-# =========================================================
-# المستخدمون
-# =========================================================
+    # المستخدمون
+
+    # =========================================================
 
 async def admin_users(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2832,15 +2848,16 @@ async def admin_users(
         "\n".join(lines)
     )
 
+    # =========================================================
 
-# =========================================================
-# المجموعات
-# =========================================================
+    # المجموعات
+
+    # =========================================================
 
 async def admin_groups(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2907,15 +2924,16 @@ async def admin_groups(
         text
     )
 
+    # =========================================================
 
-# =========================================================
-# الإحصائيات
-# =========================================================
+    # الإحصائيات
+
+    # =========================================================
 
 async def admin_stats(
     update,
     context,
-):
+    ):
 
     query = update.callback_query
 
@@ -2993,15 +3011,16 @@ async def admin_stats(
         f"📊 متوسط الدرجات: {average_text}"
     )
 
+    # =========================================================
 
-# =========================================================
-# معالجة الأخطاء
-# =========================================================
+    # معالجة الأخطاء
+
+    # =========================================================
 
 async def error_handler(
     update,
     context,
-):
+    ):
 
     logger.error(
         "Unhandled exception",
@@ -3024,10 +3043,11 @@ async def error_handler(
 
         pass
 
+    # =========================================================
 
-# =========================================================
-# بناء التطبيق
-# =========================================================
+    # بناء التطبيق
+
+    # =========================================================
 
 def build_application():
 
@@ -3277,10 +3297,11 @@ def build_application():
 
     return application
 
+    # =========================================================
 
-# =========================================================
-# تشغيل البوت
-# =========================================================
+    # تشغيل البوت
+
+    # =========================================================
 
 def main():
 
@@ -3294,7 +3315,6 @@ def main():
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
-
 
 if __name__ == "__main__":
     main()
