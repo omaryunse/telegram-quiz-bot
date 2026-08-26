@@ -13,11 +13,7 @@ USERS_FILE = "users.json"
 GROUPS_FILE = "groups.json"
 RESULTS_FILE = "results.json"
 
-# حالات المحادثة لبناء اختبار
 STATE_TITLE, STATE_DESCRIPTION, STATE_DURATION, STATE_Q_TEXT, STATE_Q_OPTIONS, STATE_Q_CORRECT, STATE_Q_MORE = range(7)
-
-# حالات جلسة الاختبار للمستخدم
-STATE_ANSWERING = 100
 
 def load_json(file):
     if os.path.exists(file):
@@ -99,19 +95,20 @@ async def start(update, context):
 async def help_cmd(update, context):
     await update.message.reply_text("/start - فتح القائمة\n/newquiz - إنشاء اختبار (للمسؤولين فقط)")
 
-async def newquiz_cmd(update, context):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("🚫 للمسؤولين فقط.")
+async def admin_new_start(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
         return ConversationHandler.END
     context.user_data["quiz_build"] = {"title": "", "description": "", "duration_per_question": 60, "questions": []}
-    await update.message.reply_text("✍️ أرسل عنوان الاختبار:")
+    await query.message.reply_text("✍️ أرسل عنوان الاختبار:")
     return STATE_TITLE
 
 async def handle_title(update, context):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     context.user_data["quiz_build"]["title"] = update.message.text.strip()
-    await update.message.reply_text("📝 أرسل وصف الاختبار (أو اكتب /skip):")
+    await update.message.reply_text("📝 أرسل وصف الاختبار (أو اكتب /skip للتخطي):")
     return STATE_DESCRIPTION
 
 async def skip_description(update, context):
@@ -207,12 +204,10 @@ async def share_quiz_callback(update, context):
     if not quiz:
         await query.message.reply_text("الاختبار غير موجود.")
         return
-    # إنشاء رسالة مشاركة مع زر بدء الاختبار
     kb = [[InlineKeyboardButton("🚀 بدء الاختبار", callback_data=f"startquiz_{quiz_id}")]]
     share_text = f"📣 **{quiz['title']}**\n\nاضغط الزر لبدء الاختبار فورًا!"
     await query.message.reply_text(share_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-# بدء الاختبار للمستخدم
 async def start_quiz_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -223,7 +218,6 @@ async def start_quiz_callback(update, context):
         return
     user = query.from_user
     track_user(user)
-    # إنشاء جلسة اختبار
     session = {
         "quiz_id": quiz_id,
         "current_q": 0,
@@ -240,7 +234,6 @@ async def show_question(chat_id, context, session, quiz):
         return
     q = quiz["questions"][idx]
     kb = [[InlineKeyboardButton(opt, callback_data=f"answer_{idx}_{i}")] for i, opt in enumerate(q["options"])]
-    # إظهار عداد المدة (اختياري، يمكن إضافة عداد مؤقت، لكن نكتفي بالمدة الزمنية في النص)
     await context.bot.send_message(chat_id, f"❓ {q['text']}\n\n⏱️ لديك {quiz['duration_per_question']} ثانية.", reply_markup=InlineKeyboardMarkup(kb))
 
 async def answer_callback(update, context):
@@ -283,12 +276,14 @@ async def finish_quiz(chat_id, context):
     correct_count = sum(1 for a in session["answers"] if a["is_correct"])
     total = len(quiz["questions"])
     result_text = f"📊 انتهى الاختبار!\n\n✅ الإجابات الصحيحة: {correct_count} من {total}\n"
-    user = context.user_data.get("user")
-    # حفظ النتيجة في ملف النتائج
+    # حفظ النتيجة
     results = load_results()
     qid = session["quiz_id"]
     if qid not in results:
         results[qid] = []
+    user = context.user_data.get("user")
+    if not user:
+        user = None
     results[qid].append({
         "user_id": user.id if user else "غير معروف",
         "first_name": user.first_name if user else "",
@@ -300,7 +295,6 @@ async def finish_quiz(chat_id, context):
     save_results(results)
     await context.bot.send_message(chat_id, result_text)
 
-# عرض النتائج للمسؤول
 async def admin_results_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -329,10 +323,50 @@ async def show_results_handler(update, context):
         text += f"• {r['first_name']} ({username}) - صحيح: {r['correct']}/{r['total']}\n"
     await query.message.reply_text(text)
 
+async def admin_groups_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    groups = load_groups()
+    if not groups:
+        await query.message.reply_text("لا توجد مجموعات مسجلة.")
+    else:
+        text = "🌐 المجموعات:\n\n"
+        for gid, g in groups.items():
+            text += f"• {g['title']} - ID: {gid}\n"
+        await query.message.reply_text(text)
+
+async def admin_users_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    users = load_users()
+    if not users:
+        await query.message.reply_text("لا يوجد مستخدمون.")
+    else:
+        text = "👥 المستخدمون:\n\n"
+        for uid, u in users.items():
+            uname = f"@{u.get('username')}" if u.get('username') else "بدون"
+            text += f"• {u.get('first_name','')} ({uname}) - ID: {uid}\n"
+        await query.message.reply_text(text)
+
+async def back_admin_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    await query.message.edit_text("🔐 لوحة التحكم:", reply_markup=admin_keyboard())
+
 def main():
     app = Application.builder().token(TOKEN).build()
+
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("newquiz", newquiz_cmd)],
+        entry_points=[
+            CommandHandler("newquiz", admin_new_start),
+            CallbackQueryHandler(admin_new_start, pattern="^admin_new$")
+        ],
         states={
             STATE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_title)],
             STATE_DESCRIPTION: [
@@ -347,48 +381,23 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)]
     )
-    app.add_handler(conv_handler)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(conv_handler)
+
+    # معالجات الأزرار العامة
     app.add_handler(CallbackQueryHandler(share_quiz_callback, pattern="^share_"))
     app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^startquiz_"))
     app.add_handler(CallbackQueryHandler(answer_callback, pattern="^answer_"))
     app.add_handler(CallbackQueryHandler(admin_results_callback, pattern="^admin_results$"))
     app.add_handler(CallbackQueryHandler(show_results_handler, pattern="^showres_"))
-    app.add_handler(CallbackQueryHandler(admin_keyboard_handler, pattern="^admin_"))
-    app.add_handler(CallbackQueryHandler(lambda u,c: None, pattern="^back_admin$"))
+    app.add_handler(CallbackQueryHandler(admin_groups_callback, pattern="^admin_groups$"))
+    app.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^admin_users$"))
+    app.add_handler(CallbackQueryHandler(back_admin_callback, pattern="^back_admin$"))
+
     print("البوت يعمل الآن...")
     app.run_polling()
-
-async def admin_keyboard_handler(update, context):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        return
-    data = query.data
-    if data == "admin_new":
-        context.user_data["quiz_build"] = {"title": "", "description": "", "duration_per_question": 60, "questions": []}
-        await query.message.reply_text("✍️ أرسل عنوان الاختبار:")
-        # ملاحظة: هذا سيحتاج إلى محادثة، لكن هنا نضع بديلاً بسيطًا
-    elif data == "admin_results":
-        await admin_results_callback(update, context)
-    elif data == "admin_groups":
-        groups = load_groups()
-        if not groups:
-            await query.message.reply_text("لا توجد مجموعات مسجلة.")
-        else:
-            text = "🌐 المجموعات:\n\n" + "\n".join([f"• {g['title']} - ID: {gid}" for gid,g in groups.items()])
-            await query.message.reply_text(text)
-    elif data == "admin_users":
-        users = load_users()
-        if not users:
-            await query.message.reply_text("لا يوجد مستخدمون.")
-        else:
-            text = "👥 المستخدمون:\n\n"
-            for uid,u in users.items():
-                uname = f"@{u.get('username')}" if u.get('username') else "بدون"
-                text += f"• {u.get('first_name','')} ({uname}) - ID: {uid}\n"
-            await query.message.reply_text(text)
 
 if __name__ == "__main__":
     main()
