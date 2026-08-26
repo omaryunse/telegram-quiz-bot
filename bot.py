@@ -189,6 +189,7 @@ async def handle_q_more(update, context):
         preview = f"📋 **{quiz['title']}**\n📝 {quiz['description']}\n⏱️ مدة السؤال: {quiz['duration_per_question']} ثانية\nعدد الأسئلة: {len(quiz['questions'])}\n\n"
         kb = [
             [InlineKeyboardButton("📤 مشاركة الاختبار", callback_data=f"share_{quiz_id}")],
+            [InlineKeyboardButton("📢 نشر للمجموعات", callback_data=f"publish_{quiz_id}")],
             [InlineKeyboardButton("↩️ رجوع للوحة", callback_data="back_admin")],
         ]
         await query.message.reply_text(preview + "استخدم زر المشاركة لنشر الاختبار.", reply_markup=InlineKeyboardMarkup(kb))
@@ -207,6 +208,53 @@ async def share_quiz_callback(update, context):
     kb = [[InlineKeyboardButton("🚀 بدء الاختبار", callback_data=f"startquiz_{quiz_id}")]]
     share_text = f"📣 **{quiz['title']}**\n\nاضغط الزر لبدء الاختبار فورًا!"
     await query.message.reply_text(share_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def publish_quiz_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    quiz_id = query.data.replace("publish_", "")
+    quiz = load_quizzes().get(quiz_id)
+    if not quiz:
+        await query.message.reply_text("الاختبار غير موجود.")
+        return
+    groups = load_groups()
+    if not groups:
+        await query.message.reply_text("لا توجد مجموعات مسجلة.")
+        return
+    kb = [[InlineKeyboardButton(g["title"], callback_data=f"sendtogroup_{gid}_{quiz_id}")] for gid, g in groups.items()]
+    kb.append([InlineKeyboardButton("↩️ رجوع", callback_data=f"share_{quiz_id}")])
+    await query.message.reply_text("اختر المجموعة التي تريد نشر الاختبار فيها:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def send_to_group_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    data = query.data
+    parts = data.split("_")
+    if len(parts) < 3:
+        await query.message.reply_text("معرف غير صالح.")
+        return
+    gid = parts[1]
+    quiz_id = parts[2]
+    quiz = load_quizzes().get(quiz_id)
+    if not quiz:
+        await query.message.reply_text("الاختبار غير موجود.")
+        return
+    try:
+        gid_int = int(gid)
+    except:
+        await query.message.reply_text("معرف المجموعة غير صالح.")
+        return
+    kb = [[InlineKeyboardButton("🚀 بدء الاختبار", callback_data=f"startquiz_{quiz_id}")]]
+    share_text = f"📣 **{quiz['title']}**\n\nاضغط الزر لبدء الاختبار فورًا!"
+    try:
+        await context.bot.send_message(chat_id=gid_int, text=share_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.message.reply_text("✅ تم نشر الاختبار في المجموعة.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ فشل النشر: {e}")
 
 async def start_quiz_callback(update, context):
     query = update.callback_query
@@ -234,7 +282,45 @@ async def show_question(chat_id, context, session, quiz):
         return
     q = quiz["questions"][idx]
     kb = [[InlineKeyboardButton(opt, callback_data=f"answer_{idx}_{i}")] for i, opt in enumerate(q["options"])]
-    await context.bot.send_message(chat_id, f"❓ {q['text']}\n\n⏱️ لديك {quiz['duration_per_question']} ثانية.", reply_markup=InlineKeyboardMarkup(kb))
+    # إرسال السؤال مع عداد زمني (سنعرض وقت البدء فقط هنا، لكن سنضيف job_queue لاحقًا)
+    sent_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"❓ سؤال {idx+1} من {len(quiz['questions'])}\n\n{q['text']}\n\n⏱️ لديك {quiz['duration_per_question']} ثانية",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+    # حفظ معرّف الرسالة لاستخدامه في التحديثات
+    session["current_message_id"] = sent_msg.message_id
+    session["question_start_time"] = datetime.now()
+    # جدولة انتهاء الوقت
+    context.job_queue.run_once(
+        time_out_callback,
+        quiz["duration_per_question"],
+        data={"chat_id": chat_id, "session": session, "quiz": quiz, "context": context}
+    )
+
+async def time_out_callback(context):
+    job = context.job
+    data = job.data
+    session = data["session"]
+    quiz = data["quiz"]
+    chat_id = data["chat_id"]
+    ctx = data["context"]
+    # التحقق من أن السؤال لم يُجب عليه بعد
+    if session["current_q"] < len(quiz["questions"]) and session.get("current_message_id"):
+        # إرسال رسالة انتهاء الوقت
+        await ctx.bot.send_message(chat_id=chat_id, text="⏰ انتهى الوقت!")
+        # اعتبار عدم الإجابة كإجابة خاطئة
+        q_index = session["current_q"]
+        session["answers"].append({
+            "question_index": q_index,
+            "selected": None,
+            "is_correct": False
+        })
+        session["current_q"] += 1
+        if session["current_q"] >= len(quiz["questions"]):
+            await finish_quiz(chat_id, ctx)
+        else:
+            await show_question(chat_id, ctx, session, quiz)
 
 async def answer_callback(update, context):
     query = update.callback_query
@@ -261,6 +347,9 @@ async def answer_callback(update, context):
         "is_correct": is_correct
     })
     session["current_q"] += 1
+    # حذف المهمة المجدولة لتجنب انتهاء الوقت بعد الإجابة
+    if "current_job" in session:
+        session["current_job"].schedule_removal()
     if session["current_q"] >= len(quiz["questions"]):
         await finish_quiz(query.message.chat_id, context)
     else:
@@ -388,6 +477,8 @@ def main():
 
     # معالجات الأزرار العامة
     app.add_handler(CallbackQueryHandler(share_quiz_callback, pattern="^share_"))
+    app.add_handler(CallbackQueryHandler(publish_quiz_callback, pattern="^publish_"))
+    app.add_handler(CallbackQueryHandler(send_to_group_callback, pattern="^sendtogroup_"))
     app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^startquiz_"))
     app.add_handler(CallbackQueryHandler(answer_callback, pattern="^answer_"))
     app.add_handler(CallbackQueryHandler(admin_results_callback, pattern="^admin_results$"))
