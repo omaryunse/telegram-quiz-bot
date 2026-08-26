@@ -25,7 +25,7 @@ filters,
 
 # =========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("8733506822:AAH9CA5_S7M0frI5hJlzNcKPsPudDyHZNSM", "PUT_YOUR_BOT_TOKEN_HERE")
 
 # ضع Telegram User ID الخاص بالأدمن هنا
 
