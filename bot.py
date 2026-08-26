@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -20,8 +21,9 @@ from telegram.constants import ChatType
 # ---------------------------
 # إعدادات أساسية - ضع التوكن هنا
 # ---------------------------
-TOKEN = "8845301824:AAGptI-Na__Tp0ZbFgvQ-HSfHOawDCuhFK4"
-ADMIN_IDS = ["7021041990", "8810965759", "7020921829"]
+TOKEN = "8845301824:AAGptI-Na__Tp0ZbFgvQ-HSfHOawDCuhFK4"  # ضع التوكن الحقيقي هنا
+# استخدم أرقام كأعداد صحيحة لتسهيل التحويل عند الإرسال
+ADMIN_IDS = [7021041990, 8810965759, 7020921829]
 
 # ملفات التخزين
 QUIZZES_FILE = "quizzes.json"
@@ -45,6 +47,9 @@ SETTINGS_FILE = "settings.json"
 # جلسات نشطة في الذاكرة لكل مستخدم أثناء الإجابة التتابعية
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
+# قفل لحماية عمليات القراءة/الكتابة على الملفات
+FILE_LOCK = threading.Lock()
+
 # سجل
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,15 +60,21 @@ logger = logging.getLogger(__name__)
 def load_json(path: str) -> Dict[str, Any]:
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with FILE_LOCK:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
         except Exception:
+            logger.exception("فشل قراءة الملف JSON: %s", path)
             return {}
     return {}
 
 def save_json(path: str, data: Dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        with FILE_LOCK:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.exception("فشل حفظ الملف JSON: %s", path)
 
 def load_quizzes() -> Dict[str, Any]:
     return load_json(QUIZZES_FILE)
@@ -93,22 +104,39 @@ def load_settings() -> Dict[str, Any]:
     s = load_json(SETTINGS_FILE)
     if not s:
         s = {"allow_anonymous": False, "bot_name": "Quiz Bot"}
-        save_json(SETTINGS_FILE, s)
+        save_settings(s)
     return s
 
 def save_settings(data: Dict[str, Any]) -> None:
     save_json(SETTINGS_FILE, data)
 
 # ---------------------------
-# صلاحيات وتعقب المستخدمين والمجموعات
+# مساعدة عامة
 # ---------------------------
+def uid_str(user_id: int) -> str:
+    return str(user_id)
+
+def safe_text_from_update(update: Update) -> str:
+    if update.message and update.message.text:
+        return update.message.text.strip()
+    if update.callback_query and update.callback_query.message and update.callback_query.message.text:
+        return update.callback_query.message.text.strip()
+    return ""
+
 def is_admin(user_id: Optional[int]) -> bool:
-    return str(user_id) in ADMIN_IDS if user_id is not None else False
+    return user_id in ADMIN_IDS if user_id is not None else False
 
 async def require_admin_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    user = update.effective_user if update.effective_user else (update.callback_query.from_user if update.callback_query else None)
+    # تحقق أن المستخدم مسؤول وأن المحادثة خاصة
+    user = None
+    if update.effective_user:
+        user = update.effective_user
+    elif update.callback_query and update.callback_query.from_user:
+        user = update.callback_query.from_user
     if not user or not is_admin(user.id):
-        if update.effective_chat and update.effective_chat.type == ChatType.PRIVATE:
+        # إذا كانت الرسالة في الخاص، أبلغ المستخدم أن البوت للمسؤولين
+        chat = update.effective_chat
+        if chat and chat.type == ChatType.PRIVATE:
             if update.message:
                 await update.message.reply_text("⚠️ هذا البوت مخصص للمسؤولين فقط.")
             elif update.callback_query:
@@ -116,6 +144,9 @@ async def require_admin_private(update: Update, context: ContextTypes.DEFAULT_TY
         return False
     return True
 
+# ---------------------------
+# تتبع المستخدمين والمجموعات
+# ---------------------------
 def track_user(user) -> None:
     if not user:
         return
@@ -139,7 +170,7 @@ def track_group(chat) -> None:
             save_groups(groups)
 
 # ---------------------------
-# واجهة المسؤول (لوحة)
+# لوحة المسؤول (لوحة)
 # ---------------------------
 def admin_keyboard() -> InlineKeyboardMarkup:
     kb = [
@@ -179,7 +210,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/leaderboard - لوحة المتصدرين\n"
         "/help - هذه الرسالة"
     )
-    await update.message.reply_text(text)
+    if update.message:
+        await update.message.reply_text(text)
 
 # ---------------------------
 # لوحة المسؤول - أزرار
@@ -189,13 +221,13 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not query:
         return
     await query.answer()
+    # تحقق صلاحية المسؤول (لوحة الإدارة يجب أن تكون خاصة)
     if not await require_admin_private(update, context):
         return
     track_user(query.from_user)
-    data = query.data
+    data = query.data or ""
 
     if data == "admin_new":
-        # بدء إنشاء اختبار جديد (واحد فقط في هذه الجلسة)
         context.user_data["quiz_build"] = {"title": "", "description": "", "duration": 60, "questions": []}
         await query.message.reply_text("✍️ أرسل **عنوان الاختبار** الآن (أي نص):")
         return
@@ -261,7 +293,7 @@ async def view_results_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     if not await require_admin_private(update, context):
         return
-    qid = query.data.replace("viewres_", "")
+    qid = (query.data or "").replace("viewres_", "")
     results = load_results().get(qid, [])
     if not results:
         await query.message.reply_text("لا توجد نتائج لهذا الاختبار بعد.")
@@ -288,75 +320,87 @@ async def newquiz_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
     context.user_data["quiz_build"] = {"title": "", "description": "", "duration": 60, "questions": []}
-    await update.message.reply_text("✍️ أرسل عنوان الاختبار الآن:")
+    if update.message:
+        await update.message.reply_text("✍️ أرسل عنوان الاختبار الآن:")
     return STATE_TITLE
 
 async def handle_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    text = update.message.text.strip() if update.message and update.message.text else ""
+    text = safe_text_from_update(update)
     if not text:
-        await update.message.reply_text("⚠️ العنوان لا يمكن أن يكون فارغاً. أعد الإرسال:")
+        if update.message:
+            await update.message.reply_text("⚠️ العنوان لا يمكن أن يكون فارغاً. أعد الإرسال:")
         return STATE_TITLE
     context.user_data["quiz_build"]["title"] = text
-    await update.message.reply_text("📝 أرسل وصف الاختبار (أو اكتب /skip لتخطي الوصف):")
+    if update.message:
+        await update.message.reply_text("📝 أرسل وصف الاختبار (أو اكتب /skip لتخطي الوصف):")
     return STATE_DESCRIPTION
 
 async def skip_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
     context.user_data["quiz_build"]["description"] = ""
-    await update.message.reply_text("⏳ أرسل مدة الإجابة لكل سؤال بالثواني (مثال: 30 أو 60):")
+    if update.message:
+        await update.message.reply_text("⏳ أرسل مدة الإجابة لكل سؤال بالثواني (مثال: 30 أو 60):")
     return STATE_DURATION
 
 async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    context.user_data["quiz_build"]["description"] = update.message.text.strip() if update.message and update.message.text else ""
-    await update.message.reply_text("⏳ أرسل مدة الإجابة لكل سؤال بالثواني (مثال: 30 أو 60):")
+    context.user_data["quiz_build"]["description"] = safe_text_from_update(update)
+    if update.message:
+        await update.message.reply_text("⏳ أرسل مدة الإجابة لكل سؤال بالثواني (مثال: 30 أو 60):")
     return STATE_DURATION
 
 async def handle_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    text = update.message.text.strip() if update.message and update.message.text else ""
+    text = safe_text_from_update(update)
     try:
         dur = int(text)
         if dur <= 0:
             raise ValueError
     except Exception:
-        await update.message.reply_text("⚠️ قيمة غير صحيحة. أرسل مدة بالثواني مثل 30 أو 60.")
+        if update.message:
+            await update.message.reply_text("⚠️ قيمة غير صحيحة. أرسل مدة بالثواني مثل 30 أو 60.")
         return STATE_DURATION
     context.user_data["quiz_build"]["duration"] = dur
-    await update.message.reply_text("✍️ أرسل نص السؤال الأول:")
+    if update.message:
+        await update.message.reply_text("✍️ أرسل نص السؤال الأول:")
     return STATE_Q_TEXT
 
 async def handle_q_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    text = update.message.text.strip() if update.message and update.message.text else ""
+    text = safe_text_from_update(update)
     if not text:
-        await update.message.reply_text("⚠️ نص السؤال لا يمكن أن يكون فارغاً. أعد الإرسال:")
+        if update.message:
+            await update.message.reply_text("⚠️ نص السؤال لا يمكن أن يكون فارغاً. أعد الإرسال:")
         return STATE_Q_TEXT
     context.user_data["current_q"] = {"text": text, "options": [], "correct": None}
-    await update.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر). الحد الأدنى 2 والحد الأقصى 10:")
+    if update.message:
+        await update.message.reply_text("🔢 أرسل الخيارات (كل خيار في سطر). الحد الأدنى 2 والحد الأقصى 10:")
     return STATE_Q_OPTIONS
 
 async def handle_q_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    raw = update.message.text if update.message and update.message.text else ""
+    raw = safe_text_from_update(update)
     opts = [line.strip() for line in raw.splitlines() if line.strip()]
     if len(opts) < 2:
-        await update.message.reply_text("⚠️ يجب أن يكون هناك خياران على الأقل. أعد الإرسال:")
+        if update.message:
+            await update.message.reply_text("⚠️ يجب أن يكون هناك خياران على الأقل. أعد الإرسال:")
         return STATE_Q_OPTIONS
     if len(opts) > 10:
-        await update.message.reply_text("⚠️ الحد الأقصى 10 خيارات. أعد الإرسال:")
+        if update.message:
+            await update.message.reply_text("⚠️ الحد الأقصى 10 خيارات. أعد الإرسال:")
         return STATE_Q_OPTIONS
     context.user_data["current_q"]["options"] = opts
     kb = [[InlineKeyboardButton(f"{i+1}. {o}", callback_data=f"setcorr_{i}")] for i, o in enumerate(opts)]
     kb.append([InlineKeyboardButton("بدون إجابة صحيحة", callback_data="setcorr_none")])
-    await update.message.reply_text("✅ اختر الإجابة الصحيحة (أو اختر بدون إجابة صحيحة):", reply_markup=InlineKeyboardMarkup(kb))
+    if update.message:
+        await update.message.reply_text("✅ اختر الإجابة الصحيحة (أو اختر بدون إجابة صحيحة):", reply_markup=InlineKeyboardMarkup(kb))
     return STATE_Q_CORRECT
 
 async def handle_q_correct(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -366,7 +410,7 @@ async def handle_q_correct(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not await require_admin_private(update, context):
         return ConversationHandler.END
-    data = query.data
+    data = query.data or ""
     if data == "setcorr_none":
         context.user_data["current_q"]["correct"] = None
     else:
@@ -439,7 +483,7 @@ async def announce_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not await require_admin_private(update, context):
         return
-    data = query.data
+    data = query.data or ""
     if not data.startswith("announce_"):
         return
     quiz_id = data.replace("announce_", "")
@@ -458,7 +502,7 @@ async def send_to_group_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     if not await require_admin_private(update, context):
         return
-    data = query.data
+    data = query.data or ""
     if not data.startswith("sendto_"):
         return
     parts = data.split("_", 2)
@@ -483,6 +527,7 @@ async def send_to_group_callback(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(chat_id=gid_int, text=text, reply_markup=InlineKeyboardMarkup(kb))
         await query.message.reply_text("✅ تم إرسال الإعلان إلى المجموعة.")
     except Exception as e:
+        logger.exception("فشل إرسال الإعلان للمجموعة")
         await query.message.reply_text(f"❌ فشل الإرسال: {e}")
 
 # ---------------------------
@@ -493,9 +538,8 @@ async def start_local_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not query:
         return
     await query.answer()
-    if not await require_admin_private(update, context):
-        return
-    quiz_id = query.data.replace("start_local_", "")
+    # لا نتحقق من صلاحية المسؤول هنا — أي مستخدم يمكنه بدء الاختبار في الخاص
+    quiz_id = (query.data or "").replace("start_local_", "")
     await start_quiz_for_user(query.from_user.id, context, quiz_id)
     await query.message.reply_text("✅ بدأ الاختبار في الخاص لديك.")
 
@@ -504,14 +548,13 @@ async def group_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not query:
         return
     await query.answer()
-    data = query.data
+    data = query.data or ""
     if not data.startswith("group_start_"):
         return
     quiz_id = data.replace("group_start_", "")
     user = query.from_user
     if not user:
         return
-    # حاول بدء الاختبار في الخاص للمستخدم
     try:
         await start_quiz_for_user(user.id, context, quiz_id)
         await query.message.reply_text(f"✅ {user.first_name} بدأ الاختبار في الخاص.")
@@ -527,9 +570,8 @@ async def start_quiz_for_user(user_id: int, context: ContextTypes.DEFAULT_TYPE, 
         except Exception:
             pass
         return
-    # تهيئة الجلسة
-    ACTIVE_SESSIONS[str(user_id)] = {"quiz_id": quiz_id, "current": 0, "answers": [], "started_at": datetime.now().isoformat()}
-    # إرسال السؤال الأول
+    uid = uid_str(user_id)
+    ACTIVE_SESSIONS[uid] = {"quiz_id": quiz_id, "current": 0, "answers": [], "started_at": datetime.now().isoformat()}
     await send_question_to_user(user_id, context, quiz, 0)
 
 async def send_question_to_user(chat_id: int, context: ContextTypes.DEFAULT_TYPE, quiz: Dict[str, Any], q_index: int) -> None:
@@ -545,9 +587,13 @@ async def send_question_to_user(chat_id: int, context: ContextTypes.DEFAULT_TYPE
     text = f"سؤال {q_index+1}/{len(questions)}:\n\n{q.get('text','')}"
     kb = []
     for i, opt in enumerate(q.get("options", [])):
+        # callback_data: ans_{quizid}_{qindex}_{i}
         kb.append([InlineKeyboardButton(f"{i+1}. {opt}", callback_data=f"ans_{quiz.get('id')}_{q_index}_{i}")])
     kb.append([InlineKeyboardButton("تخطي السؤال", callback_data=f"ans_{quiz.get('id')}_{q_index}_-1")])
-    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
+    except Exception:
+        logger.exception("فشل إرسال السؤال للمستخدم %s", chat_id)
 
 async def answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -557,8 +603,8 @@ async def answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     if not user:
         return
-    uid = str(user.id)
-    data = query.data  # ans_{quizid}_{qindex}_{opt}
+    uid = uid_str(user.id)
+    data = query.data or ""  # ans_{quizid}_{qindex}_{opt}
     parts = data.split("_")
     if len(parts) < 4:
         await query.message.reply_text("بيانات غير صحيحة.")
@@ -619,14 +665,14 @@ async def answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # حفظ النتائج وإرسال ملخص للمسؤولين
 # ---------------------------
 async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(user_chat_id)
-    session = ACTIVE_SESSIONS.get(uid)
+    uid = uid_str(user_chat_id)
+    # استخدم pop للحصول على الجلسة وحذفها فوراً
+    session = ACTIVE_SESSIONS.pop(uid, None)
     if not session:
         return
     quiz_id = session.get("quiz_id")
     results = load_results()
-    if quiz_id not in results:
-        results[quiz_id] = []
+    results.setdefault(quiz_id, [])
     correct_count = sum(1 for a in session.get("answers", []) if a.get("is_correct"))
     total = len(session.get("answers", []))
     first_name = ""
@@ -637,8 +683,9 @@ async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE
         username = chat.username or ""
     except Exception:
         pass
+    new_entries = []
     for a in session.get("answers", []):
-        results[quiz_id].append({
+        new_entries.append({
             "user_id": user_chat_id,
             "first_name": first_name,
             "username": username,
@@ -649,7 +696,11 @@ async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE
             "is_correct": a.get("is_correct"),
             "answered_at": a.get("answered_at"),
         })
-    save_results(results)
+    results[quiz_id].extend(new_entries)
+    try:
+        save_results(results)
+    except Exception:
+        logger.exception("فشل حفظ النتائج")
     # رسالة للمستخدم
     try:
         await context.bot.send_message(chat_id=user_chat_id, text=f"📊 انتهى الاختبار. إجابات صحيحة: {correct_count} من {total}.")
@@ -665,127 +716,105 @@ async def finalize_session(user_chat_id: int, context: ContextTypes.DEFAULT_TYPE
         try:
             await context.bot.send_message(chat_id=int(admin), text=summary)
         except Exception:
-            logger.exception("فشل إرسال النتيجة للمسؤول %s", admin)
+            logger.exception("فشل إرسال ملخص للمسؤول")
 
 # ---------------------------
-# أوامر مفيدة للمستخدمين
+# أوامر المستخدم: نتائج شخصية ولوحة المتصدرين
 # ---------------------------
-async def myresults(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not user:
+async def myresults_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
         return
+    uid = str(update.effective_user.id)
     results = load_results()
-    quizzes = load_quizzes()
-    lines = []
+    # جمع نتائج المستخدم عبر كل الاختبارات
+    total_correct = 0
+    total_answered = 0
     for qid, entries in results.items():
-        user_entries = [e for e in entries if str(e.get("user_id")) == str(user.id)]
-        if not user_entries:
-            continue
-        quiz_title = quizzes.get(qid, {}).get("title", qid)
-        correct = sum(1 for e in user_entries if e.get("is_correct"))
-        total = len(user_entries)
-        lines.append(f"{quiz_title}: {correct}/{total}")
-    if not lines:
-        await update.message.reply_text("لم تشارك في أي اختبارات بعد.")
-        return
-    await update.message.reply_text("📋 نتائجك:\n" + "\n".join(lines))
+        for e in entries:
+            if str(e.get("user_id")) == uid:
+                total_answered += 1
+                if e.get("is_correct"):
+                    total_correct += 1
+    await update.message.reply_text(f"📊 نتائجك: إجابات صحيحة {total_correct} من {total_answered}.")
 
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     results = load_results()
-    scores: Dict[str, int] = {}
-    names: Dict[str, str] = {}
+    per_user: Dict[str, Dict[str, Any]] = {}
     for qid, entries in results.items():
         for e in entries:
             uid = str(e.get("user_id"))
-            if uid not in scores:
-                scores[uid] = 0
+            if uid not in per_user:
+                per_user[uid] = {"name": e.get("first_name",""), "username": e.get("username",""), "correct": 0, "answers": 0}
+            per_user[uid]["answers"] += 1
             if e.get("is_correct"):
-                scores[uid] += 1
-            names[uid] = e.get("first_name","") or names.get(uid,"")
-    if not scores:
-        await update.message.reply_text("لا توجد نتائج بعد.")
-        return
-    top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:10]
+                per_user[uid]["correct"] += 1
+    # ترتيب حسب النسبة أو العدد الصحيح
+    ranking = sorted(per_user.items(), key=lambda x: (-x[1]["correct"], x[1]["answers"]))
     text = "🏆 لوحة المتصدرين:\n\n"
-    for uid, sc in top:
-        text += f"{names.get(uid,'بدون')} - {sc} نقطة\n"
+    for i, (uid, info) in enumerate(ranking[:10], start=1):
+        uname = f"@{info.get('username')}" if info.get('username') else "بدون"
+        text += f"{i}. {info.get('name','')} ({uname}) — صحيح: {info.get('correct')}/{info.get('answers')}\n"
     await update.message.reply_text(text)
 
 # ---------------------------
-# إلغاء المحادثة
+# تسجيل المعالجات وربط البوت
 # ---------------------------
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await update.message.reply_text("تم الإلغاء.")
-    elif update.callback_query:
-        await update.callback_query.answer("تم الإلغاء.")
-    return ConversationHandler.END
-
-# ---------------------------
-# التسجيل والتشغيل
-# ---------------------------
-def main() -> None:
-    if TOKEN == "" or TOKEN == "PUT_YOUR_TOKEN_HERE":
-        print("ضع التوكن في متغير TOKEN داخل الملف bot.py ثم أعد التشغيل.")
-        return
-
+def build_application() -> Application:
     app = Application.builder().token(TOKEN).build()
 
-    conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("newquiz", newquiz_start),
-            CallbackQueryHandler(admin_button_handler, pattern="^admin_new$"),
-        ],
+    # أوامر أساسية
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("myresults", myresults_cmd))
+    app.add_handler(CommandHandler("leaderboard", leaderboard_cmd))
+
+    # أزرار لوحة الإدارة (CallbackQuery)
+    app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^(admin_|toggle_anonymous|back_admin|admin_results|admin_groups|admin_users|admin_settings)$"))
+    # عرض نتائج محددة
+    app.add_handler(CallbackQueryHandler(view_results_handler, pattern="^viewres_"))
+    # إرسال إعلان للمجموعة
+    app.add_handler(CallbackQueryHandler(announce_to_group, pattern="^announce_"))
+    app.add_handler(CallbackQueryHandler(send_to_group_callback, pattern="^sendto_"))
+    # بدء محلي وبدء من المجموعة
+    app.add_handler(CallbackQueryHandler(start_local_handler, pattern="^start_local_"))
+    app.add_handler(CallbackQueryHandler(group_start_handler, pattern="^group_start_"))
+    # إجابات المستخدمين
+    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
+    # إعدادات إرسال للإدارة (sendto_ handled above)
+
+    # ConversationHandler لإنشاء اختبار
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("newquiz", newquiz_start)],
         states={
             STATE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_title)],
             STATE_DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description),
                 CommandHandler("skip", skip_description),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description),
             ],
             STATE_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_duration)],
             STATE_Q_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_q_text)],
             STATE_Q_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_q_options)],
             STATE_Q_CORRECT: [CallbackQueryHandler(handle_q_correct, pattern="^setcorr_")],
             STATE_Q_MORE: [CallbackQueryHandler(handle_q_more, pattern="^(add_more|finish_quiz)$")],
-            STATE_PREVIEW: [
-                CallbackQueryHandler(start_local_handler, pattern="^start_local_"),
-                CallbackQueryHandler(announce_to_group, pattern="^announce_"),
-                CallbackQueryHandler(send_to_group_callback, pattern="^sendto_"),
-                CallbackQueryHandler(admin_button_handler, pattern="^back_admin$"),
-            ],
+            STATE_PREVIEW: [CallbackQueryHandler(announce_to_group, pattern="^announce_"), CallbackQueryHandler(start_local_handler, pattern="^start_local_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[],
         allow_reentry=True,
     )
+    app.add_handler(conv_handler)
 
-    # أوامر عامة
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("myresults", myresults))
-    app.add_handler(CommandHandler("leaderboard", leaderboard))
-    app.add_handler(CommandHandler("newquiz", newquiz_start))
-
-    # أزرار لوحة المسؤول
-    app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^(admin_new|admin_results|admin_groups|admin_users|admin_settings|toggle_anonymous|back_admin)$"))
-    app.add_handler(CallbackQueryHandler(view_results_handler, pattern="^viewres_"))
-    app.add_handler(CallbackQueryHandler(handle_q_correct, pattern="^setcorr_"))
-    app.add_handler(CallbackQueryHandler(announce_to_group, pattern="^announce_"))
+    # بعض المعالجات العامة للأزرار الأخرى
     app.add_handler(CallbackQueryHandler(send_to_group_callback, pattern="^sendto_"))
-    app.add_handler(CallbackQueryHandler(start_local_handler, pattern="^start_local_"))
-    app.add_handler(CallbackQueryHandler(group_start_handler, pattern="^group_start_"))
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_|^ans_"))  # older patterns safe
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
-    # handler for answers using our ans_ prefix
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
-    # handler for answers using ans_ with id
-    app.add_handler(CallbackQueryHandler(answer_callback, pattern="^ans_"))
+    app.add_handler(CallbackQueryHandler(announce_to_group, pattern="^announce_"))
+    app.add_handler(CallbackQueryHandler(admin_button_handler))  # catch-all for admin buttons
 
-    # conv handler آخر
-    app.add_handler(conv)
+    return app
 
-    print("البوت يعمل الآن...")
+def main():
+    app = build_application()
+    logger.info("بدء تشغيل البوت...")
     app.run_polling()
 
 if __name__ == "__main__":
